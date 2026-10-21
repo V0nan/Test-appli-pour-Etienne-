@@ -9,10 +9,15 @@ const { html, render, useState, useEffect, useRef } = htmPreact;
 const uid = () => Math.random().toString(36).slice(2, 10);
 const num = (v) => {
   if (v == null || v === '') return 0;
-  const n = parseFloat(String(v).replace(/\s/g, '').replace(',', '.'));
+  let t = String(v).replace(/[\s\u00a0\u202f€]/g, '').replace(/[\u2212\u2013]/g, '-');
+  if (t.includes(',')) t = t.replace(/\./g, '').replace(',', '.');
+  if (!/^[-+]?(\d+\.?\d*|\.\d+)$/.test(t)) return 0;
+  const n = parseFloat(t);
   return Number.isFinite(n) ? n : 0;
 };
 const hasVal = (v) => v != null && v !== '';
+// Nombre lisible ? (pour ne pas transformer une cellule vide ou « N/A » en 0)
+const isNum = (v) => hasVal(String(v ?? '').trim()) && (num(v) !== 0 || /^[\s+-]*0*[.,]?0*\s*€?\s*$/.test(String(v)));
 const round2 = (n) => Math.round(n * 100) / 100;
 const sum = (arr, f = (x) => x) => arr.reduce((a, x) => a + f(x), 0);
 const avg = (arr) => (arr.length ? sum(arr) / arr.length : null);
@@ -20,8 +25,9 @@ const eur = (n) => (n ?? 0).toLocaleString('fr-FR', { style: 'currency', currenc
 const eur0 = (n) => (n ?? 0).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
 const fmt = (n, d = 2) => (n ?? 0).toLocaleString('fr-FR', { maximumFractionDigits: d });
 const pct = (n, d = 1) => (n == null ? '–' : (n * 100).toLocaleString('fr-FR', { maximumFractionDigits: d }) + ' %');
-const today = () => new Date().toISOString().slice(0, 10);
-const daysAgo = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+const isoLocal = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+const today = () => isoLocal(new Date());
+const daysAgo = (n) => isoLocal(new Date(Date.now() - n * 864e5));
 const dateFr = (d) => (d ? new Date(d + 'T12:00:00').toLocaleDateString('fr-FR') : '');
 const addDays = (d, n) => new Date(new Date(d + 'T12:00:00').getTime() + n * 864e5).toISOString().slice(0, 10);
 const ageDays = (d) => (d ? (Date.now() - new Date(d + 'T12:00:00').getTime()) / 864e5 : Infinity);
@@ -50,23 +56,61 @@ const PIECES_COURANTES = ['Salon', 'Séjour', 'Cuisine', 'Chambre', 'Chambre 2',
    ========================================================================= */
 const KEY = 'metre-devis.v1';
 let storageOk = true;
+let donneesCorrompues = null; // clé où le texte illisible a été mis de côté
 let state = load();
 const listeners = new Set();
 
 function load() {
+  let raw = null;
+  try { raw = localStorage.getItem(KEY); } catch (e) { storageOk = false; return seed(); }
+  if (!raw) return seed();
   try {
-    const raw = localStorage.getItem(KEY);
-    if (raw) return migrate(JSON.parse(raw));
-  } catch (e) { storageOk = false; }
-  return seed();
+    return migrate(JSON.parse(raw));
+  } catch (e) {
+    // On ne réécrit jamais par-dessus des données illisibles : copie de côté d'abord
+    const k = KEY + '.illisible-' + today();
+    try { localStorage.setItem(k, raw); donneesCorrompues = k; } catch (e2) { storageOk = false; }
+    return seed();
+  }
 }
+// Autre onglet / fenêtre : on recharge au lieu d'écraser son travail
+window.addEventListener('storage', (e) => {
+  if (e.key !== KEY || !e.newValue) return;
+  try { state = migrate(JSON.parse(e.newValue)); listeners.forEach((l) => l()); } catch (err) {}
+});
+// Complète les données incomplètes (anciennes versions, fichiers abîmés) pour que l'appli ne plante pas
 function migrate(s) {
+  if (!s || typeof s !== 'object') throw new Error('Données invalides');
   const base = defaultSettings();
+  const arr = (x) => (Array.isArray(x) ? x : []);
   s.settings = Object.assign({}, base, s.settings || {});
   s.settings.entreprise = Object.assign({}, base.entreprise, (s.settings && s.settings.entreprise) || {});
-  s.produits = s.produits || [];
-  s.ouvrages = s.ouvrages || [];
-  s.devis = s.devis || [];
+  s.produits = arr(s.produits).filter((p) => p && typeof p === 'object')
+    .map((p) => ({ categorie: 'Autre', unite: 'pièce', contenance: 1, prix: 0, historique: [], ...p, id: p.id || uid(), nom: String(p.nom || 'Produit sans nom') }));
+  s.ouvrages = arr(s.ouvrages).filter((o) => o && typeof o === 'object')
+    .map((o) => ({ base: 'murs', temps: 0, ...o, id: o.id || uid(), nom: String(o.nom || 'Ouvrage sans nom'), fournitures: arr(o.fournitures).filter((f) => f && f.produitId) }));
+  s.devis = arr(s.devis).filter((d) => d && typeof d === 'object').map((d) => {
+    const n = {
+      date: today(), statut: 'brouillon', objet: '', chantier: '', remisePct: 0, signe: null, rex: null, notes: '',
+      ...d,
+      id: d.id || uid(), numero: String(d.numero || '?'),
+      client: Object.assign({ nom: '', adresse: '', tel: '', email: '' }, d.client || {}),
+      params: Object.assign(paramsFromSettings(s.settings), d.params || {}),
+      divers: arr(d.divers).filter(Boolean).map((x) => ({ id: uid(), designation: '', vente: null, cout: null, ...x })),
+    };
+    if (!STATUTS[n.statut]) n.statut = 'brouillon';
+    n.pieces = arr(d.pieces).filter(Boolean).map((p) => ({
+      ...nouvellePiece(''), ...p, id: p.id || uid(), nom: String(p.nom || ''),
+      lignes: arr(p.lignes).filter((l) => l && l.ouvrage && typeof l.ouvrage === 'object').map((l) => ({
+        id: l.id || uid(), qte: l.qte ?? null,
+        ouvrage: {
+          id: l.ouvrage.id || '', nom: String(l.ouvrage.nom || ''), base: BASES[l.ouvrage.base] ? l.ouvrage.base : 'forfait', temps: l.ouvrage.temps ?? 0,
+          fournitures: arr(l.ouvrage.fournitures).filter((f) => f && f.produit && typeof f.produit === 'object'),
+        },
+      })),
+    }));
+    return n;
+  });
   return s;
 }
 function save() {
@@ -152,12 +196,12 @@ function surfaces(p) {
 function consoOf(f, produit) {
   if (hasVal(f.conso)) return num(f.conso);
   const r = num(produit.rendement);
-  return r > 0 ? num(f.couches || 1) / r : 0;
+  return r > 0 ? (hasVal(f.couches) ? num(f.couches) : 1) / r : 0;
 }
 
 function calcLigne(l, piece, pr) {
-  const auto = surfaces(piece)[l.ouvrage.base] ?? 0;
-  const qte = hasVal(l.qte) ? num(l.qte) : auto;
+  const auto = round2(surfaces(piece)[l.ouvrage.base] ?? 0);
+  const qte = Math.max(0, round2(hasVal(l.qte) ? num(l.qte) : auto));
   const heures = qte * num(l.ouvrage.temps);
   const fourn = l.ouvrage.fournitures.map((f) => {
     const p = f.produit;
@@ -166,8 +210,11 @@ function calcLigne(l, piece, pr) {
     return { produit: p, besoin, cout: besoin * prixUnit };
   });
   const coutFourn = sum(fourn, (f) => f.cout);
-  const vente = heures * num(pr.tauxHoraire) + coutFourn * num(pr.coefFournitures);
-  return { qte, auto, heures, fourn, coutFourn, vente, pu: qte ? vente / qte : 0, unite: BASES[l.ouvrage.base]?.unite || 'u' };
+  // Sur le devis client, Qté × PU doit tomber juste : on arrondit le PU, puis le total de la ligne
+  const brut = heures * num(pr.tauxHoraire) + coutFourn * num(pr.coefFournitures);
+  const pu = qte ? round2(brut / qte) : 0;
+  const vente = round2(pu * qte);
+  return { qte, auto, heures, fourn, coutFourn, vente, pu, unite: BASES[l.ouvrage.base]?.unite || 'u' };
 }
 
 function calcDevis(d) {
@@ -180,6 +227,7 @@ function calcDevis(d) {
     for (const f of c.fourn) {
       const k = f.produit.id;
       const e = map.get(k) || { produit: f.produit, besoin: 0 };
+      if (num(f.produit.prix) > num(e.produit.prix)) e.produit = f.produit; // si deux versions de prix : la plus prudente
       e.besoin += f.besoin;
       map.set(k, e);
     }
@@ -192,10 +240,10 @@ function calcDevis(d) {
   const coutFourn = sum(courses, (e) => e.cout);
   const heures = sum(all, (x) => x.c.heures);
   const coutMO = heures * num(pr.coutHoraire);
-  const diversVente = sum(d.divers, (x) => num(x.vente));
+  const diversVente = sum(d.divers, (x) => round2(num(x.vente)));
   const diversCout = sum(d.divers, (x) => num(x.cout));
-  const sousTotal = sum(all, (x) => x.c.vente) + diversVente;
-  const remise = sousTotal * num(d.remisePct) / 100;
+  const sousTotal = round2(sum(all, (x) => x.c.vente) + diversVente);
+  const remise = round2(sousTotal * num(d.remisePct) / 100);
   const totalHT = round2(sousTotal - remise);
   const coutTotal = coutFourn + coutMO + diversCout;
   const margeBrute = totalHT - coutFourn - diversCout; // ce qui reste pour payer le temps passé
@@ -217,7 +265,7 @@ function calcDevis(d) {
     res.signe = signe;
     res.margeSignee = signe - coutTotal;
     res.margeSigneePct = signe > 0 ? (signe - coutTotal) / signe : 0;
-    res.negociation = totalHT > 0 ? 1 - signe / totalHT : 0;
+    res.negociation = sousTotal > 0 ? 1 - signe / sousTotal : 0;
     res.rexSaisi = hReel != null || fReel != null;
     res.heuresReelles = hReel;
     res.margeReelle = signe - coutReel;
@@ -244,11 +292,11 @@ function produitsModifies(d) {
   }
   return n;
 }
+// Ne change que les prix / conditionnements des produits, pas les temps ni la composition des ouvrages
 function actualiserPrix(d) {
-  for (const p of d.pieces) for (const l of p.lignes) {
-    const o = ouvById(l.ouvrage.id);
-    if (o) l.ouvrage = snapOuvrage(o, state.produits);
-    else for (const f of l.ouvrage.fournitures) { const cur = prodById(f.produit.id); if (cur) f.produit = snapProduit(cur); }
+  for (const p of d.pieces) for (const l of p.lignes) for (const f of l.ouvrage.fournitures) {
+    const cur = prodById(f.produit.id);
+    if (cur) f.produit = snapProduit(cur);
   }
 }
 
@@ -262,8 +310,14 @@ function margeClass(p, mini) {
    Création d'objets
    ========================================================================= */
 function numeroDevis(s, date) {
-  const n = s.settings.prochainNumero++;
-  return `D${(date || today()).slice(0, 4)}-${String(n).padStart(3, '0')}`;
+  const pris = new Set((s.devis || []).map((d) => d.numero));
+  let numero;
+  do {
+    const n = Math.max(1, Math.round(num(s.settings.prochainNumero)) || 1);
+    s.settings.prochainNumero = n + 1;
+    numero = `D${(date || today()).slice(0, 4)}-${String(n).padStart(3, '0')}`;
+  } while (pris.has(numero));
+  return numero;
 }
 function nouvellePiece(nom) {
   return { id: uid(), nom: nom || '', L: null, l: null, H: 2.5, deduction: null, dedPerimetre: null, lignes: [] };
@@ -363,6 +417,7 @@ function effacerExemples() {
   update((s) => {
     s.devis = s.devis.filter((d) => !d.exemple);
     s.exemples = false;
+    if (!s.devis.length) s.settings.prochainNumero = 1; // le premier vrai devis sera le n° 001
   });
 }
 
@@ -381,14 +436,25 @@ function download(name, text, type) {
     return true;
   } catch (e) { return false; }
 }
+// Lit un fichier texte ; si ce n'est pas de l'UTF-8 (CSV enregistré par Excel sous Windows), relit en Windows-1252
 function readFile(file) {
-  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsText(file, 'utf-8'); });
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const buf = r.result;
+      let t = new TextDecoder('utf-8').decode(buf);
+      if (t.includes('\ufffd')) { try { t = new TextDecoder('windows-1252').decode(buf); } catch (e) {} }
+      res(t);
+    };
+    r.onerror = rej;
+    r.readAsArrayBuffer(file);
+  });
 }
-const CSV_COLS = ['ref', 'nom', 'categorie', 'unite', 'contenance', 'prix_ht', 'rendement', 'fournisseur'];
+const CSV_COLS = ['id', 'ref', 'nom', 'categorie', 'unite', 'contenance', 'prix_ht', 'rendement', 'fournisseur'];
 function produitsCSV() {
   const esc = (v) => { const t = v == null ? '' : String(v); return /[;"\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
   const dec = (v) => (v == null || v === '' ? '' : String(v).replace('.', ','));
-  const rows = state.produits.map((p) => [p.ref, p.nom, p.categorie, p.unite, dec(p.contenance), dec(p.prix), dec(p.rendement), p.fournisseur].map(esc).join(';'));
+  const rows = state.produits.map((p) => [p.id, p.ref, p.nom, p.categorie, p.unite, dec(p.contenance), dec(p.prix), dec(p.rendement), p.fournisseur].map(esc).join(';'));
   return '﻿' + CSV_COLS.join(';') + '\n' + rows.join('\n');
 }
 function parseCSV(text) {
@@ -416,48 +482,62 @@ function importProduitsCSV(text) {
   const iNom = idx('nom', 'designation', 'produit', 'libelle');
   const iPrix = idx('prixht', 'prix', 'tarif', 'prixachat');
   if (iNom < 0 || iPrix < 0) throw new Error('Colonnes « nom » et « prix_ht » introuvables. Partez du fichier exporté pour garder le bon format.');
-  const iRef = idx('ref', 'reference', 'code'), iCat = idx('categorie', 'famille'), iUn = idx('unite'),
+  const iId = idx('id'), iRef = idx('ref', 'reference', 'code'), iCat = idx('categorie', 'famille'), iUn = idx('unite'),
     iCont = idx('contenance', 'conditionnement', 'quantite'), iRend = idx('rendement'), iFour = idx('fournisseur');
-  let maj = 0, ajout = 0;
+  let maj = 0, ajout = 0, ignores = 0, ambigus = 0;
+  const vus = new Set();
   update((s) => {
     for (const r of rows.slice(1)) {
       const nom = (r[iNom] || '').trim();
       if (!nom) continue;
       const ref = iRef >= 0 ? (r[iRef] || '').trim() : '';
-      let p = (ref && s.produits.find((x) => x.ref && norm(x.ref) === norm(ref))) || s.produits.find((x) => norm(x.nom) === norm(nom));
+      const id = iId >= 0 ? (r[iId] || '').trim() : '';
+      const libres = s.produits.filter((x) => !vus.has(x.id));
+      let p = (id && libres.find((x) => x.id === id)) || (ref && libres.find((x) => x.ref && norm(x.ref) === norm(ref)));
+      if (!p) {
+        const memeNom = libres.filter((x) => norm(x.nom) === norm(nom));
+        if (memeNom.length > 1) { ambigus++; continue; } // plusieurs produits portent ce nom : on ne devine pas
+        p = memeNom[0];
+      }
+      if (!isNum(r[iPrix])) { ignores++; continue; } // prix vide ou illisible : on garde le prix actuel
       const prix = num(r[iPrix]);
       if (!p) {
         p = { id: uid(), nom, ref, categorie: 'Autre', unite: 'pièce', contenance: 1, prix, rendement: null, fournisseur: '', maj: today(), historique: [] };
         s.produits.push(p); ajout++;
       } else {
-        if (num(p.prix) !== prix) { p.historique = [...(p.historique || []), { date: p.maj, prix: p.prix }]; p.maj = today(); }
-        else p.maj = today();
+        if (num(p.prix) !== prix) { p.historique = [...(p.historique || []), { date: p.maj, prix: p.prix }].slice(-20); p.maj = today(); }
         p.exemple = false;
         maj++;
       }
+      vus.add(p.id);
       p.prix = prix;
-      p.nom = nom;
+      if (!nom.includes('\ufffd')) p.nom = nom;
       if (ref) p.ref = ref;
-      if (iCat >= 0 && r[iCat]) p.categorie = r[iCat].trim();
+      if (iCat >= 0 && r[iCat] && !r[iCat].includes('\ufffd')) p.categorie = r[iCat].trim();
       if (iUn >= 0 && r[iUn]) p.unite = r[iUn].trim();
-      if (iCont >= 0 && r[iCont]) p.contenance = num(r[iCont]) || 1;
-      if (iRend >= 0) p.rendement = hasVal((r[iRend] || '').trim()) ? num(r[iRend]) : p.rendement;
+      if (iCont >= 0 && isNum(r[iCont]) && num(r[iCont]) > 0) p.contenance = num(r[iCont]);
+      if (iRend >= 0 && isNum(r[iRend])) p.rendement = num(r[iRend]);
       if (iFour >= 0 && r[iFour]) p.fournisseur = r[iFour].trim();
     }
   });
-  return { maj, ajout };
+  return { maj, ajout, ignores, ambigus };
 }
 function exportSauvegarde() {
-  update((s) => { s.settings.derniereSauvegarde = today(); });
-  return JSON.stringify(state, null, 1);
+  return JSON.stringify({ ...state, settings: { ...state.settings, derniereSauvegarde: today() } }, null, 1);
 }
+function marquerSauvegarde() { update((s) => { s.settings.derniereSauvegarde = today(); }); }
 function importSauvegarde(text) {
-  const data = JSON.parse(text);
+  let data;
+  try { data = JSON.parse(text); } catch (e) { throw new Error("Ce fichier n'est pas une sauvegarde Métré & Devis."); }
   if (!data || !Array.isArray(data.produits) || !Array.isArray(data.devis)) throw new Error("Ce fichier n'est pas une sauvegarde Métré & Devis.");
-  state = migrate(data);
+  const nouveau = migrate(data);
+  calcAll(nouveau); // vérifie que tout se calcule avant de remplacer quoi que ce soit
+  try { localStorage.setItem(KEY + '.avant-restauration', JSON.stringify(state)); } catch (e) {}
+  state = nouveau;
   save();
   listeners.forEach((l) => l());
 }
+function calcAll(s) { for (const d of s.devis) calcDevis(d); }
 
 /* =========================================================================
    Composants de base
@@ -465,14 +545,14 @@ function importSauvegarde(text) {
 const fmtIn = (v) => (v == null || v === '' ? '' : String(v).replace('.', ','));
 const parseIn = (t) => (String(t).trim() === '' ? null : num(t));
 
-function NumIn({ value, onSet, onCommit, placeholder, id, cls, suffix }) {
+function NumIn({ value, onSet, onCommit, placeholder, id, cls, suffix, signe }) {
   const [txt, setTxt] = useState(fmtIn(value));
   const focused = useRef(false);
   useEffect(() => { if (!focused.current && parseIn(txt) !== (value ?? null)) setTxt(fmtIn(value)); }, [value]);
-  const input = html`<input id=${id} class=${'num ' + (cls || '')} type="text" inputmode="decimal" autocomplete="off"
+  const input = html`<input id=${id} class=${'num ' + (cls || '')} type="text" inputmode=${signe ? 'text' : 'decimal'} autocomplete="off"
     value=${txt} placeholder=${placeholder}
     onFocus=${(e) => { focused.current = true; e.target.select(); }}
-    onBlur=${() => { focused.current = false; }}
+    onBlur=${() => { focused.current = false; if (onCommit && !onSet && value != null && parseIn(txt) == null) setTxt(fmtIn(value)); }}
     onInput=${(e) => { const t = e.target.value; setTxt(t); if (onSet) onSet(parseIn(t)); }}
     onChange=${(e) => { if (onCommit) onCommit(parseIn(e.target.value)); }} />`;
   if (!suffix) return input;
@@ -548,6 +628,8 @@ function App() {
             onClick=${() => { setTab(k); if (k === 'devis') setDevisId(null); }}>${Icon[k]}<span>${l}</span></button>`)}
         </nav>
       </header>
+      ${donneesCorrompues ? html`<div class="banner warn"><span>Les données enregistrées sur cet appareil étaient illisibles. Elles ont été mises de côté (rien n'est effacé) et l'appli a redémarré avec les exemples. Restaurez votre dernière sauvegarde dans Réglages.</span>
+        <button type="button" class="btn sm" onClick=${() => { try { download('donnees-illisibles-' + today() + '.json', localStorage.getItem(donneesCorrompues) || '', 'application/json'); } catch (e) {} }}>Télécharger les données mises de côté</button></div>` : null}
       ${!storageOk ? html`<div class="banner warn">Ce navigateur ne peut pas enregistrer les données : elles seront perdues à la fermeture. Ouvrez l'appli dans un navigateur normal (pas en navigation privée).</div>` : null}
       ${view}
     </div>
@@ -604,7 +686,7 @@ function DevisEdit({ d, onBack, onDoc, onOpen }) {
   const [detail, setDetail] = useState(false);
   const [showParams, setShowParams] = useState(false);
   const set = (fn) => update(() => fn(d));
-  const nbModifs = d.statut === 'brouillon' || d.statut === 'envoye' ? produitsModifies(d) : 0;
+  const nbModifs = d.statut === 'brouillon' ? produitsModifies(d) : 0;
   const mini = num(d.params.margeMini);
   const ref = refAcceptes(d.id);
 
@@ -625,7 +707,8 @@ function DevisEdit({ d, onBack, onDoc, onOpen }) {
   };
   const prixCible = (v) => {
     if (v == null || c.sousTotal <= 0) return;
-    set((d) => { d.remisePct = round2(Math.max(0, (1 - v / c.sousTotal) * 100)); });
+    if (v > c.sousTotal) { toast('Ce prix est au-dessus du prix calculé : pas de remise à appliquer.'); return; }
+    set((d) => { d.remisePct = Math.round(Math.max(0, (1 - v / c.sousTotal) * 100) * 1e4) / 1e4; });
   };
 
   return html`<section class="section">
@@ -698,7 +781,7 @@ function DevisEdit({ d, onBack, onDoc, onOpen }) {
       ${d.statut === 'accepte' ? html`
         <div class="fields">
           <${Field} label="Signé le"><input id="sg-date" type="date" value=${d.signe?.date || ''} onInput=${(e) => set((d) => { d.signe = { ...(d.signe || {}), date: e.target.value }; })} /><//>
-          <${Field} label="Prix signé HT" hint=${c.negociation > 0.0005 ? 'Négocié de ' + pct(c.negociation) : 'Prix du devis'}><${NumIn} id="sg-prix" value=${d.signe?.prixHT} onSet=${(v) => set((d) => { d.signe = { ...(d.signe || {}), prixHT: v }; })} /><//>
+          <${Field} label="Prix signé HT" hint=${c.negociation > 0.0005 ? 'Soit ' + pct(c.negociation) + ' de moins que le prix de départ' : 'Prix du devis'}><${NumIn} id="sg-prix" value=${d.signe?.prixHT} onSet=${(v) => set((d) => { d.signe = { ...(d.signe || {}), prixHT: v }; })} /><//>
         </div>
         <p class="lab">Retour de chantier (une fois terminé)</p>
         <div class="fields">
@@ -718,7 +801,7 @@ function DevisEdit({ d, onBack, onDoc, onOpen }) {
     <div class="summary" aria-live="polite">
       <div class="main">
         <div><div class="tot">${eur(c.totalHT)} <span class="small" style="font-weight:500">HT</span></div><div class="ttc">${eur(c.ttc)} TTC · ${fmt(c.heures, 1)} h de travail</div></div>
-        <div class="mgbox"><div class="small" style="opacity:.75">marge nette</div><div class=${'mgv ' + margeClass(c.margePct, mini)}>${pct(c.margePct)}</div></div>
+        <div class="mgbox"><div class="small" style="opacity:.75">marge nette</div><div class=${'mgv ' + (c.totalHT > 0 ? margeClass(c.margePct, mini) : '')}>${c.totalHT > 0 ? pct(c.margePct) : '–'}</div></div>
       </div>
       <button type="button" class="toggle" onClick=${() => setDetail(!detail)}>${detail ? 'Masquer le détail' : 'Voir coûts et marge de négociation'}</button>
       ${detail ? html`<dl>
@@ -770,7 +853,7 @@ function PieceCard({ d, p, i, calc }) {
       <button type="button" class="chip" onClick=${() => set((p) => { p.deduction = round2(num(p.deduction) + 1.6); p.dedPerimetre = round2(num(p.dedPerimetre) + 0.8); })}>+ Porte (1,6 m²)</button>
       <button type="button" class="chip" onClick=${() => set((p) => { p.deduction = round2(num(p.deduction) + 1.5); })}>+ Fenêtre (1,5 m²)</button>
       <button type="button" class="chip" onClick=${() => set((p) => { p.deduction = round2(num(p.deduction) + 2.6); p.dedPerimetre = round2(num(p.dedPerimetre) + 1.2); })}>+ Porte-fenêtre (2,6 m²)</button>
-      ${num(p.deduction) ? html`<button type="button" class="chip" onClick=${() => set((p) => { p.deduction = null; p.dedPerimetre = null; })}>Remettre à 0</button>` : null}
+      ${num(p.deduction) || num(p.dedPerimetre) ? html`<button type="button" class="chip" onClick=${() => set((p) => { p.deduction = null; p.dedPerimetre = null; })}>Remettre à 0</button>` : null}
     </div>
     <div class="surf">
       <span>Murs <b>${fmt(sf.murs, 1)} m²</b></span><span>Plafond <b>${fmt(sf.plafond, 1)} m²</b></span><span>Sol <b>${fmt(sf.sol, 1)} m²</b></span><span>Périmètre <b>${fmt(sf.perimetre, 1)} ml</b></span>
@@ -892,11 +975,12 @@ function Courses({ d, onBack }) {
 
 /* ---------------------------------------------------------- Produits */
 function setPrix(p, v) {
-  if (v == null || num(v) === num(p.prix)) return;
+  if (v == null || num(v) === num(p.prix)) return false;
   update(() => {
     p.historique = [...(p.historique || []), { date: p.maj, prix: p.prix }].slice(-20);
     p.prix = num(v); p.maj = today(); p.exemple = false;
   });
+  return true;
 }
 function Produits() {
   const s = state;
@@ -906,7 +990,8 @@ function Produits() {
   const [outil, setOutil] = useState(false);
   const fileRef = useRef();
   const cats = [...new Set([...CATEGORIES.filter((c) => s.produits.some((p) => p.categorie === c)), ...s.produits.map((p) => p.categorie)])];
-  const list = s.produits.filter((p) => (!cat || p.categorie === cat) && (!q || norm(p.nom + ' ' + (p.ref || '') + ' ' + (p.fournisseur || '')).includes(norm(q))));
+  const enCours = open && s.produits.find((p) => p.id === open);
+  const list = s.produits.filter((p) => p.id !== open && (!cat || p.categorie === cat) && (!q || norm(p.nom + ' ' + (p.ref || '') + ' ' + (p.fournisseur || '')).includes(norm(q))));
   const groupes = cats.map((c) => [c, list.filter((p) => p.categorie === c)]).filter(([, l]) => l.length);
   const vieux = s.produits.filter((p) => ageDays(p.maj) > 180).length;
   const nouveau = () => {
@@ -917,7 +1002,13 @@ function Produits() {
   const onImport = async (e) => {
     const f = e.target.files[0]; e.target.value = '';
     if (!f) return;
-    try { const r = importProduitsCSV(await readFile(f)); toast(`${r.maj} produit(s) mis à jour, ${r.ajout} ajouté(s)`); } catch (err) { toast(err.message); }
+    try {
+      const r = importProduitsCSV(await readFile(f));
+      let msg = `${r.maj} produit(s) mis à jour, ${r.ajout} ajouté(s)`;
+      if (r.ignores) msg += `, ${r.ignores} ligne(s) sans prix ignorée(s)`;
+      if (r.ambigus) msg += `, ${r.ambigus} ignorée(s) car plusieurs produits ont le même nom`;
+      toast(msg);
+    } catch (err) { toast(err.message); }
   };
 
   return html`<section class="section">
@@ -938,12 +1029,11 @@ function Produits() {
         <option value="">Toutes catégories</option>${cats.map((c) => html`<option value=${c}>${c}</option>`)}
       </select>
     </div>
+    ${enCours ? html`<${ProduitEdit} key=${enCours.id} p=${enCours} onClose=${() => setOpen(null)} />` : null}
     <div class="card">
       ${groupes.length === 0 ? html`<div class="empty">Aucun produit.</div>` : groupes.map(([c, l]) => html`
         <div class="cat-title">${c}</div>
-        <div class="plist">${l.map((p) => open === p.id
-          ? html`<${ProduitEdit} key=${p.id} p=${p} onClose=${() => setOpen(null)} />`
-          : html`<div class="prow" key=${p.id}>
+        <div class="plist">${l.map((p) => html`<div class="prow" key=${p.id}>
             <div class="grow">
               <button type="button" class="pn" onClick=${() => setOpen(p.id)}>${p.nom}</button>
               <div class="pm"><span>${fmt(p.contenance)} ${p.unite}</span>
@@ -952,7 +1042,7 @@ function Produits() {
                 ${p.fournisseur ? html`<span>${p.fournisseur}</span>` : null}
                 <span class=${ageDays(p.maj) > 180 ? 'old' : ''}>prix du ${dateFr(p.maj)}</span></div>
             </div>
-            <${NumIn} id=${'pp-' + p.id} value=${p.prix} suffix="€" onCommit=${(v) => { setPrix(p, v); toast('Prix enregistré'); }} />
+            <${NumIn} id=${'pp-' + p.id} value=${p.prix} suffix="€" onCommit=${(v) => { if (setPrix(p, v)) toast('Prix enregistré'); }} />
           </div>`)}</div>`)}
     </div>
     <p class="hint">Touchez un prix pour le modifier : l'ancien prix est gardé dans l'historique. Les devis déjà envoyés gardent les prix du jour où ils ont été faits.</p>
@@ -962,24 +1052,28 @@ function Produits() {
 function OutilPrix({ onImport }) {
   const s = state;
   const [taux, setTaux] = useState(null);
+  const [sens, setSens] = useState(1);
   const [cat, setCat] = useState('');
   const [four, setFour] = useState('');
   const fours = [...new Set(s.produits.map((p) => p.fournisseur).filter(Boolean))];
   const cible = s.produits.filter((p) => (!cat || p.categorie === cat) && (!four || p.fournisseur === four));
   const appliquer = () => {
     if (!num(taux)) return;
-    update(() => { for (const p of cible) { p.historique = [...(p.historique || []), { date: p.maj, prix: p.prix }].slice(-20); p.prix = round2(num(p.prix) * (1 + num(taux) / 100)); p.maj = today(); p.exemple = false; } });
+    const t = sens * Math.abs(num(taux));
+    update(() => { for (const p of cible) { p.historique = [...(p.historique || []), { date: p.maj, prix: p.prix }].slice(-20); p.prix = round2(num(p.prix) * (1 + t / 100)); p.maj = today(); p.exemple = false; } });
     toast(`${cible.length} prix mis à jour`); setTaux(null);
   };
   return html`<div class="card">
     <span class="tape">Hausse ou baisse générale</span>
     <div class="fields">
-      <${Field} label="Variation"><${NumIn} id="op-t" value=${taux} placeholder="ex. 4,5" suffix="%" onSet=${setTaux} /><//>
+      <${Field} label="Variation"><div class="row" style="flex-wrap:nowrap">
+        <div class="chips" style="flex-wrap:nowrap"><button type="button" class=${'chip' + (sens > 0 ? ' on' : '')} onClick=${() => setSens(1)}>Hausse</button><button type="button" class=${'chip' + (sens < 0 ? ' on' : '')} onClick=${() => setSens(-1)}>Baisse</button></div>
+        <${NumIn} id="op-t" value=${taux} placeholder="ex. 4,5" suffix="%" onSet=${setTaux} /></div><//>
       <${Field} label="Fournisseur"><select id="op-f" value=${four} onChange=${(e) => setFour(e.target.value)}><option value="">Tous</option>${fours.map((f) => html`<option value=${f}>${f}</option>`)}</select><//>
       <${Field} label="Catégorie"><select id="op-c" value=${cat} onChange=${(e) => setCat(e.target.value)}><option value="">Toutes</option>${[...new Set(s.produits.map((p) => p.categorie))].map((c) => html`<option value=${c}>${c}</option>`)}</select><//>
     </div>
     <div class="row"><button type="button" class="btn primary" disabled=${!num(taux)} onClick=${appliquer}>Appliquer à ${cible.length} produit${cible.length > 1 ? 's' : ''}</button>
-      <span class="hint">Mettez un chiffre négatif pour une baisse.</span></div>
+</div>
     <span class="tape">Avec un tableur (Excel)</span>
     <p class="small">Exportez la liste, modifiez les prix dans Excel ou LibreOffice, puis importez le fichier : les produits sont reconnus par leur référence ou leur nom, et les nouveaux sont ajoutés.</p>
     <div class="row">
@@ -1063,13 +1157,15 @@ function OuvrageEdit({ o, onClose }) {
       <span class="tape">Produits utilisés</span>
       ${o.fournitures.map((f, i) => {
         const p = prodById(f.produitId);
-        const auto = p && num(p.rendement) ? num(f.couches || 1) / num(p.rendement) : null;
+        const auto = p && num(p.rendement) ? (hasVal(f.couches) ? num(f.couches) : 1) / num(p.rendement) : null;
+        const manque = auto == null && !hasVal(f.conso);
         return html`<div class="frow" key=${i}>
           <${Field} label="Produit"><select id=${'of-p-' + i} value=${f.produitId} onChange=${(e) => set(() => { f.produitId = e.target.value; })}>
             ${prods.map((x) => html`<option value=${x.id}>${x.nom}</option>`)}</select><//>
           <${Field} label="Couches"><${NumIn} id=${'of-c-' + i} value=${f.couches} onSet=${(v) => set(() => { f.couches = v; })} /><//>
           <${Field} label=${(p ? p.unite : '') + ' par ' + u}><${NumIn} id=${'of-q-' + i} value=${f.conso} placeholder=${auto != null ? fmt(auto, 3) : 'à saisir'} onSet=${(v) => set(() => { f.conso = v; })} /><//>
           <button type="button" class="x" aria-label="Retirer" onClick=${() => set((o) => { o.fournitures.splice(i, 1); })}>×</button>
+          ${manque ? html`<p class="small mg-bad" style="grid-column:1/-1">Ce produit n'a pas de rendement : il ne sera pas compté. Indiquez son rendement dans Produits ou une quantité par ${u}.</p>` : null}
         </div>`;
       })}
       <p class="hint">La consommation se calcule avec le rendement du produit et le nombre de couches. Remplissez « par ${u} » seulement pour forcer une autre valeur.</p>
@@ -1122,10 +1218,11 @@ function Bilan({ onOpen }) {
     const k = c.sousTotal > 0 ? (d.statut === 'accepte' ? c.signe : c.totalHT) / c.sousTotal : 1;
     for (const p of c.pieces) for (const { ligne: l, c: lc } of p.lignes) {
       if (!lc.qte || l.ouvrage.base === 'forfait') continue;
-      const e = parOuv.get(l.ouvrage.nom) || { nom: l.ouvrage.nom, unite: lc.unite, acc: { q: 0, v: 0 }, ref: { q: 0, v: 0 } };
+      const cle = l.ouvrage.nom + '|' + lc.unite;
+      const e = parOuv.get(cle) || { nom: l.ouvrage.nom, unite: lc.unite, acc: { q: 0, v: 0 }, ref: { q: 0, v: 0 } };
       const t = d.statut === 'accepte' ? e.acc : e.ref;
       t.q += lc.qte; t.v += lc.vente * k;
-      parOuv.set(l.ouvrage.nom, e);
+      parOuv.set(cle, e);
     }
   }
   const ouvRows = [...parOuv.values()].sort((a, b) => b.acc.v + b.ref.v - (a.acc.v + a.ref.v));
@@ -1158,7 +1255,7 @@ function Bilan({ onOpen }) {
       <div class="kpi"><span class="k">Devis signés</span><span class="v">${pct(taux, 0)}</span><span class="s">${acc.length} signé(s) / ${decides} décidé(s)${env.length ? ' · ' + env.length + ' en attente' : ''}</span></div>
       <div class="kpi"><span class="k">Chiffre signé HT</span><span class="v">${eur0(ca)}</span><span class="s">${env.length ? eur0(sum(env, (x) => x.c.totalHT)) + ' en attente de réponse' : 'aucun devis en attente'}</span></div>
       <div class="kpi"><span class="k">Marge nette signée</span><span class=${'v ' + (moyAcc != null ? margeClass(moyAcc, mini) : '')}>${pct(moyAcc, 0)}</span><span class="s">${moyReelle != null ? 'réelle après chantier : ' + pct(moyReelle, 0) : 'moyenne des devis acceptés'}</span></div>
-      <div class="kpi"><span class="k">Remise négociée</span><span class="v">${pct(nego)}</span><span class="s">en moyenne sur les devis signés</span></div>
+      <div class="kpi"><span class="k">Remise accordée</span><span class="v">${pct(nego)}</span><span class="s">en moyenne sur les devis signés, négociation comprise</span></div>
     </div>
 
     ${all.length ? html`<div class="card">
@@ -1219,11 +1316,11 @@ function Reglages() {
   const sauver = () => {
     const txt = exportSauvegarde();
     if (!download('metre-devis-sauvegarde-' + today() + '.json', txt, 'application/json')) toast('Téléchargement impossible ici');
-    else toast('Sauvegarde téléchargée');
+    else { marquerSauvegarde(); toast('Sauvegarde téléchargée'); }
   };
   const copier = () => {
     const txt = exportSauvegarde();
-    try { navigator.clipboard.writeText(txt).then(() => toast('Données copiées'), () => setCopie(true)); } catch (err) { setCopie(true); }
+    try { navigator.clipboard.writeText(txt).then(() => { marquerSauvegarde(); toast('Données copiées'); }, () => setCopie(true)); } catch (err) { setCopie(true); }
   };
 
   return html`<section class="section">
@@ -1253,7 +1350,7 @@ function Reglages() {
         <${Field} label="Marge nette minimum" hint="Sert à calculer le prix plancher"><${NumIn} id="s-mm" value=${round2(num(st.margeMini) * 100)} suffix="%" onSet=${(v) => set((st) => { st.margeMini = num(v) / 100; })} /><//>
         <${Field} label="Validité du devis"><${NumIn} id="s-val" value=${st.validite} suffix="jours" onSet=${(v) => set((st) => { st.validite = v; })} /><//>
         <${Field} label="Acompte à la signature"><${NumIn} id="s-ac" value=${st.acompte} suffix="%" onSet=${(v) => set((st) => { st.acompte = v; })} /><//>
-        <${Field} label="Prochain n° de devis"><${NumIn} id="s-num" value=${st.prochainNumero} onSet=${(v) => set((st) => { st.prochainNumero = Math.max(1, Math.round(num(v))); })} /><//>
+        <${Field} label="Prochain n° de devis"><${NumIn} id="s-num" value=${st.prochainNumero} onSet=${(v) => { if (v != null && v >= 1) set((st) => { st.prochainNumero = Math.round(v); }); }} /><//>
       </div>
     </div>
     <div class="card">
@@ -1262,7 +1359,7 @@ function Reglages() {
       <p class="muted small">Dernière sauvegarde : ${st.derniereSauvegarde ? dateFr(st.derniereSauvegarde) : 'jamais'}</p>
       <div class="row">
         <button type="button" class="btn primary" onClick=${sauver}>Télécharger une sauvegarde</button>
-        <button type="button" class="btn" onClick=${() => fileRef.current.click()}>Restaurer une sauvegarde</button>
+        <${ConfirmBtn} cls="plain" label="Restaurer une sauvegarde" confirm="Remplacer les données actuelles ?" onConfirm=${() => fileRef.current.click()} />
         <button type="button" class="btn ghost" onClick=${copier}>Copier les données</button>
       </div>
       <input ref=${fileRef} type="file" accept=".json,application/json" hidden onChange=${onRestore} />
@@ -1279,4 +1376,22 @@ function Reglages() {
   </section>`;
 }
 
-render(html`<${App} />`, document.getElementById('app'));
+// Si un écran plante, on propose de quoi récupérer plutôt qu'une page blanche
+function Root() {
+  const [err, reset] = htmPreact.useErrorBoundary();
+  if (err) {
+    return html`<div class="shell"><div class="card">
+      <h2>Un problème est survenu</h2>
+      <p>Vos données ne sont pas effacées. Vous pouvez réessayer, télécharger vos données, ou revenir à la version d'avant la dernière restauration.</p>
+      <p class="muted small">${String(err && err.message || err)}</p>
+      <div class="row">
+        <button type="button" class="btn primary" onClick=${reset}>Réessayer</button>
+        <button type="button" class="btn" onClick=${() => download('metre-devis-secours-' + today() + '.json', JSON.stringify(state), 'application/json')}>Télécharger mes données</button>
+        ${(() => { try { return localStorage.getItem(KEY + '.avant-restauration'); } catch (e) { return null; } })() ? html`<button type="button" class="btn" onClick=${() => {
+          try { state = migrate(JSON.parse(localStorage.getItem(KEY + '.avant-restauration'))); save(); reset(); } catch (e) {}
+        }}>Revenir avant la restauration</button>` : null}
+      </div></div></div>`;
+  }
+  return html`<${App} />`;
+}
+render(html`<${Root} />`, document.getElementById('app'));

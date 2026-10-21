@@ -147,6 +147,7 @@ select { appearance: auto; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .btn.ghost { background: none; border-color: transparent; color: var(--accent); padding-inline: 8px; }
 .btn.danger { color: var(--bad); }
+.btn.danger.plain { color: var(--ink); }
 .btn.danger.armed { background: var(--bad); border-color: var(--bad); color: #fff; }
 .btn.sm { padding: 5px 10px; font-size: .85rem; }
 .btn svg { width: 16px; height: 16px; }
