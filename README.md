@@ -12,7 +12,9 @@ Fonctionne sur téléphone, tablette et ordinateur, **sans compte, sans serveur 
 | **Produits** | Base de prix des fournitures (peintures, enduits, bâches, scotch…). Modification d'un prix en un geste (l'ancien prix est gardé), hausse ou baisse générale en %, alerte pour les prix non vérifiés depuis 6 mois. Import/export Excel en mode avancé. |
 | **Travaux** | Les travaux types : combien de m² à l'heure et quels produits (avec nombre de couches). C'est là qu'on règle sa façon de chiffrer. |
 | **Bilan** | En trois phrases : combien de devis signés, le bénéfice moyen, la remise moyenne accordée. Deux conseils maximum. Le détail (prix au m² par travail, temps prévu et réel par chantier) est sur un bouton. |
-| **Réglages** | Entreprise (SIRET, assurance décennale…), prix de l'heure, coût de l'heure, TVA, acompte. Réglages avancés (marge sur produits, perte, bénéfice minimum, import Excel) derrière une case à cocher. Sauvegarde par partage (mail, WhatsApp) ou téléchargement. |
+| **Réglages** | Entreprise (BRN, n° de TVA, téléphone…), prix de l'heure, coût de l'heure, TVA, acompte. Réglages avancés (marge sur produits, perte, bénéfice minimum, import Excel) derrière une case à cocher. Sauvegarde par partage (mail, WhatsApp) ou téléchargement. |
+
+L'appli est réglée pour **l'île Maurice** : montants en roupies (Rs), TVA à 15 % (à mettre à 0 si l'entreprise n'est pas enregistrée à la TVA auprès de la MRA ; le devis affiche alors un total sans TVA), BRN sur le devis. Le symbole de la monnaie se change dans les réglages avancés. Les nombres se tapent à la française : virgule pour les décimales (2,5 m), espace ou rien pour les milliers (3 500 ou 3500).
 
 Au premier lancement, un écran « 3 étapes » guide le démarrage (entreprise, prix de l'heure, premier devis).
 

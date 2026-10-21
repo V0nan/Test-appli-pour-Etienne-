@@ -9,7 +9,7 @@ const { html, render, useState, useEffect, useRef } = htmPreact;
 const uid = () => Math.random().toString(36).slice(2, 10);
 const num = (v) => {
   if (v == null || v === '') return 0;
-  let t = String(v).replace(/[\s\u00a0\u202f€]/g, '').replace(/[\u2212\u2013]/g, '-');
+  let t = String(v).replace(/[\s\u00a0\u202f€]|Rs\.?|MUR/gi, '').replace(/[\u2212\u2013]/g, '-');
   if (t.includes(',')) t = t.replace(/\./g, '').replace(',', '.');
   if (!/^[-+]?(\d+\.?\d*|\.\d+)$/.test(t)) return 0;
   const n = parseFloat(t);
@@ -17,12 +17,19 @@ const num = (v) => {
 };
 const hasVal = (v) => v != null && v !== '';
 // Nombre lisible ? (pour ne pas transformer une cellule vide ou « N/A » en 0)
-const isNum = (v) => hasVal(String(v ?? '').trim()) && (num(v) !== 0 || /^[\s+-]*0*[.,]?0*\s*€?\s*$/.test(String(v)));
+const isNum = (v) => hasVal(String(v ?? '').trim()) && (num(v) !== 0 || /^[\s+-]*(Rs\.?)?\s*0*[.,]?0*\s*€?\s*$/i.test(String(v)));
 const round2 = (n) => Math.round(n * 100) / 100;
 const sum = (arr, f = (x) => x) => arr.reduce((a, x) => a + f(x), 0);
 const avg = (arr) => (arr.length ? sum(arr) / arr.length : null);
-const eur = (n) => (n ?? 0).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' });
-const eur0 = (n) => (n ?? 0).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
+// Montants en roupies mauriciennes : « Rs 12 500 » (le symbole se change dans les réglages avancés)
+const devise = () => { try { return state.settings.devise || 'Rs'; } catch (e) { return 'Rs'; } };
+const money = (n, d) => {
+  const t = (n ?? 0).toLocaleString('fr-FR', { minimumFractionDigits: d, maximumFractionDigits: d });
+  const sym = devise();
+  return sym === '€' ? t + '\u00a0€' : sym + '\u00a0' + t;
+};
+const eur = (n) => money(n, 2);
+const eur0 = (n) => money(n, 0);
 const fmt = (n, d = 2) => (n ?? 0).toLocaleString('fr-FR', { maximumFractionDigits: d });
 const pct = (n, d = 1) => (n == null ? '–' : (n * 100).toLocaleString('fr-FR', { maximumFractionDigits: d }) + ' %');
 const isoLocal = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
@@ -81,6 +88,12 @@ window.addEventListener('storage', (e) => {
 // Complète les données incomplètes (anciennes versions, fichiers abîmés) pour que l'appli ne plante pas
 function migrate(s) {
   if (!s || typeof s !== 'object') throw new Error('Données invalides');
+  if (s.settings && !s.settings.devise) {
+    // Version d'avant le passage en roupies : si ce ne sont que des exemples, on repart des exemples mauriciens
+    const vrais = (s.devis || []).some((d) => d && !d.exemple) || (s.produits || []).some((p) => p && !p.exemple);
+    if (!vrais) return seed();
+    s.settings.devise = '€';
+  }
   const base = defaultSettings();
   const arr = (x) => (Array.isArray(x) ? x : []);
   s.settings = Object.assign({}, base, s.settings || {});
@@ -141,14 +154,15 @@ function toast(msg, action) {
 function defaultSettings() {
   return {
     entreprise: {
-      nom: '', adresse: '', cp: '', ville: '', tel: '', email: '', siret: '',
+      nom: '', adresse: '', ville: '', tel: '', email: '', brn: '', tvaNo: '',
       assurance: '', mentions: '',
     },
-    tauxHoraire: 45, // prix de vente de l'heure de main d'œuvre (HT)
-    coutHoraire: 28, // ce que coûte réellement une heure (charges, véhicule, etc.)
+    devise: 'Rs', // roupie mauricienne
+    tauxHoraire: 600, // prix de vente de l'heure de main d'œuvre (HT)
+    coutHoraire: 350, // ce que coûte réellement une heure (charges, véhicule, etc.)
     coefFournitures: 1.25, // coefficient appliqué au prix d'achat des fournitures
     pertes: 0.1, // pertes / surconsommation
-    tva: 10,
+    tva: 15, // TVA à Maurice (0 si l'entreprise n'est pas enregistrée à la TVA)
     margeMini: 0.15, // marge nette en dessous de laquelle on ne descend pas
     validite: 30,
     acompte: 30,
@@ -345,21 +359,21 @@ function seed() {
   const s = { settings: defaultSettings(), produits: [], ouvrages: [], devis: [], exemples: true };
   const P = (id, nom, categorie, unite, contenance, prix, rendement, fournisseur, ref) =>
     s.produits.push({ id, nom, categorie, unite, contenance, prix, rendement, fournisseur, ref, maj: daysAgo(40), historique: [], exemple: true });
-  P('p1', 'Peinture acrylique mate plafond blanc', 'Peinture', 'L', 15, 96, 10, 'Fournisseur A', 'PLAF-15');
-  P('p2', 'Peinture acrylique velours murs blanc', 'Peinture', 'L', 15, 124, 11, 'Fournisseur A', 'VEL-15');
-  P('p3', 'Peinture satinée boiseries', 'Peinture', 'L', 2.5, 49, 12, 'Fournisseur A', 'SAT-2.5');
-  P('p4', 'Impression acrylique (sous-couche)', 'Sous-couche', 'L', 15, 86, 10, 'Fournisseur A', 'IMP-15');
-  P('p5', 'Enduit de rebouchage poudre', 'Enduit', 'kg', 5, 18.5, 6, 'Fournisseur B', 'REB-5');
-  P('p6', 'Enduit de lissage pâte', 'Enduit', 'kg', 25, 39, 1, 'Fournisseur B', 'LIS-25');
-  P('p7', 'Toile de verre à peindre', 'Revêtement', 'm²', 50, 68, 1, 'Fournisseur B', 'TDV-50');
-  P('p8', 'Colle toile de verre', 'Adhésif / mastic', 'kg', 15, 42, 4, 'Fournisseur B', 'COL-15');
-  P('p9', 'Bâche de protection polyane 4×25 m', 'Protection', 'rouleau', 1, 22, 80, 'Fournisseur C', 'BAC-100');
-  P('p10', 'Ruban de masquage 50 m', 'Adhésif / mastic', 'rouleau', 1, 6.5, 50, 'Fournisseur C', 'SCO-50');
-  P('p11', 'Mastic acrylique 310 ml', 'Adhésif / mastic', 'pièce', 1, 4.2, 15, 'Fournisseur C', 'MAS-310');
-  P('p12', 'Abrasif grain 120 (lot de 10)', 'Outillage / consommable', 'pièce', 10, 9, 8, 'Fournisseur C', 'ABR-120');
-  P('p13', 'Manchon microfibre 180 mm', 'Outillage / consommable', 'pièce', 1, 11.5, 60, 'Fournisseur C', 'MAN-180');
-  s.produits[1].historique = [{ date: daysAgo(220), prix: 116 }];
-  s.produits[0].historique = [{ date: daysAgo(220), prix: 92 }];
+  P('p1', 'Peinture acrylique mate plafond blanc', 'Peinture', 'L', 15, 2600, 10, 'Fournisseur A', 'PLAF-15');
+  P('p2', 'Peinture acrylique velours murs blanc', 'Peinture', 'L', 15, 3500, 11, 'Fournisseur A', 'VEL-15');
+  P('p3', 'Peinture satinée boiseries', 'Peinture', 'L', 2.5, 1100, 12, 'Fournisseur A', 'SAT-2.5');
+  P('p4', 'Impression acrylique (sous-couche)', 'Sous-couche', 'L', 15, 2400, 10, 'Fournisseur A', 'IMP-15');
+  P('p5', 'Enduit de rebouchage poudre', 'Enduit', 'kg', 5, 350, 6, 'Fournisseur B', 'REB-5');
+  P('p6', 'Enduit de lissage pâte', 'Enduit', 'kg', 25, 950, 1, 'Fournisseur B', 'LIS-25');
+  P('p7', 'Toile de verre à peindre', 'Revêtement', 'm²', 50, 2400, 1, 'Fournisseur B', 'TDV-50');
+  P('p8', 'Colle toile de verre', 'Adhésif / mastic', 'kg', 15, 1200, 4, 'Fournisseur B', 'COL-15');
+  P('p9', 'Bâche de protection polyane 4×25 m', 'Protection', 'rouleau', 1, 450, 80, 'Fournisseur C', 'BAC-100');
+  P('p10', 'Ruban de masquage 50 m', 'Adhésif / mastic', 'rouleau', 1, 95, 50, 'Fournisseur C', 'SCO-50');
+  P('p11', 'Mastic acrylique 310 ml', 'Adhésif / mastic', 'pièce', 1, 140, 15, 'Fournisseur C', 'MAS-310');
+  P('p12', 'Abrasif grain 120 (lot de 10)', 'Outillage / consommable', 'pièce', 10, 200, 8, 'Fournisseur C', 'ABR-120');
+  P('p13', 'Manchon microfibre 180 mm', 'Outillage / consommable', 'pièce', 1, 250, 60, 'Fournisseur C', 'MAN-180');
+  s.produits[1].historique = [{ date: daysAgo(220), prix: 3300 }];
+  s.produits[0].historique = [{ date: daysAgo(220), prix: 2450 }];
 
   const O = (id, nom, base, temps, fournitures) => s.ouvrages.push({ id, nom, base, temps, fournitures, exemple: true });
   const F = (produitId, couches, conso) => ({ produitId, couches: couches ?? 1, conso: conso ?? null });
@@ -402,18 +416,18 @@ function seed() {
     s.devis.push(d);
   };
   const std = ['o1', 'o2', 'o3', 'o6', 'o7'];
-  mk({ client: 'Mme Martin', objet: 'Peinture salon et couloir', jours: 190, statut: 'accepte', signeCoef: 0.95, rexCoef: 1.12,
+  mk({ client: 'Mme Ramdin', objet: 'Peinture salon et couloir', jours: 190, statut: 'accepte', signeCoef: 0.95, rexCoef: 1.12,
     pieces: [['Salon', 5.2, 4.1, 2.5, 5.4, std], ['Couloir', 6, 1.1, 2.5, 4.8, ['o1', 'o3', 'o6', 'o7', ['o8', 3]]]] });
-  mk({ client: 'M. Durand', objet: 'Rénovation chambre', jours: 150, statut: 'refuse', taux: 55,
-    pieces: [['Chambre', 3.8, 3.2, 2.5, 3.4, ['o1', 'o2', 'o4', 'o5', 'o6', 'o7']]] });
-  mk({ client: 'SCI Les Tilleuls', objet: 'Remise en peinture T3 avant location', jours: 110, statut: 'accepte', signeCoef: 0.97, rexCoef: 1.05,
-    divers: [{ designation: 'Évacuation des déchets', vente: 80, cout: 35 }],
+  mk({ client: 'M. Lagesse', objet: 'Rénovation chambre', jours: 150, statut: 'refuse', taux: 820,
+    pieces: [['Chambre', 3.8, 3.2, 2.5, 3.4, ['o1', 'o2', 'o4', 'o5', 'o6', 'o7']], ['Dressing', 2.4, 2, 2.5, 1.6, ['o1', 'o4', 'o5', 'o6', 'o7']]] });
+  mk({ client: 'Les Filaos Ltée', objet: 'Remise en peinture appartement avant location', jours: 110, statut: 'accepte', signeCoef: 0.97, rexCoef: 1.05,
+    divers: [{ designation: 'Évacuation des déchets', vente: 2000, cout: 900 }],
     pieces: [['Séjour', 5.8, 4.2, 2.5, 6, std], ['Chambre', 3.5, 3.1, 2.5, 3.2, std], ['Chambre 2', 3.2, 3, 2.5, 3.2, std], ['Couloir', 4.5, 1.1, 2.5, 6.4, ['o1', 'o6', 'o7', ['o8', 4]]]] });
-  mk({ client: 'M. Petit', objet: 'Cuisine et entrée', jours: 75, statut: 'refuse', taux: 52, remisePct: 0,
+  mk({ client: 'M. Appadoo', objet: 'Cuisine et entrée', jours: 75, statut: 'refuse', taux: 800, remisePct: 0,
     pieces: [['Cuisine', 3.6, 2.8, 2.5, 4.5, ['o1', 'o2', 'o4', 'o5', 'o6', 'o7']], ['Entrée', 2.2, 1.6, 2.5, 3.6, ['o1', 'o3', 'o6', 'o7']]] });
-  mk({ client: 'Mme Leroy', objet: 'Chambre enfant, toile de verre', jours: 40, statut: 'accepte', signeCoef: 0.92, rexCoef: 0.97,
-    pieces: [['Chambre enfant', 3.4, 3, 2.5, 3.3, ['o1', 'o2', 'o3', 'o10', 'o6', 'o7', ['o8', 1]]]] });
-  mk({ client: 'M. Bernard', objet: 'Séjour double', jours: 6, statut: 'envoye',
+  mk({ client: 'Mme Leung', objet: 'Chambre enfant, toile de verre', jours: 40, statut: 'accepte', signeCoef: 0.95, rexCoef: 0.97,
+    pieces: [['Chambre enfant', 4.2, 3.6, 2.5, 3.3, ['o1', 'o2', 'o3', 'o10', 'o6', 'o7', ['o8', 1]]]] });
+  mk({ client: 'M. Bégué', objet: 'Séjour double', jours: 6, statut: 'envoye',
     pieces: [['Séjour', 7.4, 4.6, 2.6, 8.2, [...std, 'o9', 'o11']]] });
   s.settings.prochainNumero = s.devis.length + 1;
   return s;
@@ -699,7 +713,7 @@ function Accueil({ onNouveau, go }) {
         <span class="step-n">1</span>
         <div class="grow stack">
           <b>Mon entreprise</b>
-          <span class="muted">Nom, adresse, SIRET, assurance : ils apparaissent sur vos devis.</span>
+          <span class="muted">Nom, adresse, BRN, téléphone : ils apparaissent sur vos devis.</span>
           <div><button type="button" class="btn" onClick=${() => go('reglages')}>${ok1 ? 'Modifier' : 'Remplir'}</button></div>
         </div>
       </div>
@@ -708,8 +722,8 @@ function Accueil({ onNouveau, go }) {
         <div class="grow stack">
           <b>Mon prix de l'heure</b>
           <div class="fields">
-            <${Field} label="Prix de l'heure pour le client"><${NumIn} id="w-th" value=${st.tauxHoraire} suffix="€/h" onSet=${(v) => set((st) => { st.tauxHoraire = v; })} /><//>
-            <${Field} label="Ce que vous coûte une heure" hint="Charges, camion, assurance, votre salaire"><${NumIn} id="w-ch" value=${st.coutHoraire} suffix="€/h" onSet=${(v) => set((st) => { st.coutHoraire = v; })} /><//>
+            <${Field} label="Prix de l'heure pour le client"><${NumIn} id="w-th" value=${st.tauxHoraire} suffix=${devise() + "/h"} onSet=${(v) => set((st) => { st.tauxHoraire = v; })} /><//>
+            <${Field} label="Ce que vous coûte une heure" hint="Charges, camion, assurance, votre salaire"><${NumIn} id="w-ch" value=${st.coutHoraire} suffix=${devise() + "/h"} onSet=${(v) => set((st) => { st.coutHoraire = v; })} /><//>
           </div>
         </div>
       </div>
@@ -822,14 +836,14 @@ function DevisEdit({ d, onBack, onDoc, onOpen }) {
     ${d.statut === 'accepte' ? html`<div class="card signe">
       <span class="tape">Devis signé</span>
       <div class="fields">
-        <${Field} label="Prix signé HT" hint=${c.negociation > 0.0005 ? 'Soit ' + pct(c.negociation) + ' de moins que le prix de départ' : 'Le prix du devis. Changez-le si vous avez négocié.'}><${NumIn} id="sg-prix" value=${d.signe?.prixHT} suffix="€" onSet=${(v) => set((d) => { d.signe = { ...(d.signe || {}), prixHT: v }; })} /><//>
+        <${Field} label="Prix signé HT" hint=${c.negociation > 0.0005 ? 'Soit ' + pct(c.negociation) + ' de moins que le prix de départ' : 'Le prix du devis. Changez-le si vous avez négocié.'}><${NumIn} id="sg-prix" value=${d.signe?.prixHT} suffix=${devise()} onSet=${(v) => set((d) => { d.signe = { ...(d.signe || {}), prixHT: v }; })} /><//>
         <${Field} label="Signé le"><input id="sg-date" type="date" value=${d.signe?.date || ''} onInput=${(e) => set((d) => { d.signe = { ...(d.signe || {}), date: e.target.value }; })} /><//>
       </div>
       ${!finChantier ? html`<div><button type="button" class="btn" onClick=${() => setFinChantier(true)}>Chantier terminé ? Notez le temps passé</button></div>` : html`
         <p><b>Chantier terminé</b> <span class="muted">— pour savoir ce que vous avez vraiment gagné</span></p>
         <div class="fields">
           <${Field} label="Heures passées en vrai" hint=${'Prévu : ' + fmt(c.heures, 1) + ' h'}><${NumIn} id="rx-h" value=${d.rex?.heures} suffix="h" onSet=${(v) => set((d) => { d.rex = { ...(d.rex || {}), heures: v }; })} /><//>
-          <${Field} label="Produits achetés en vrai (HT)" hint=${'Prévu : ' + eur0(c.coutFourn) + '. Laissez vide si pareil.'}><${NumIn} id="rx-f" value=${d.rex?.coutFournitures} suffix="€" onSet=${(v) => set((d) => { d.rex = { ...(d.rex || {}), coutFournitures: v }; })} /><//>
+          <${Field} label="Produits achetés en vrai (HT)" hint=${'Prévu : ' + eur0(c.coutFourn) + '. Laissez vide si pareil.'}><${NumIn} id="rx-f" value=${d.rex?.coutFournitures} suffix=${devise()} onSet=${(v) => set((d) => { d.rex = { ...(d.rex || {}), coutFournitures: v }; })} /><//>
         </div>
         ${c.rexSaisi ? html`<p class="big-line">Bénéfice réel : <b class=${margeClass(c.margeReellePct, mini)}>${eur0(c.margeReelle)} (${pct(c.margeReellePct, 0)})</b> <span class="muted">au lieu de ${pct(c.margeSigneePct, 0)} prévu</span></p>` : null}`}
     </div>` : null}
@@ -872,13 +886,13 @@ function DevisEdit({ d, onBack, onDoc, onOpen }) {
       <div class="chips">${[0, 5, 10, 15].map((r) => html`<button type="button" class=${'chip big' + (num(d.remisePct) === r ? ' on' : '')} onClick=${() => set((d) => { d.remisePct = r; })}>${r ? '− ' + r + ' %' : 'Aucune'}</button>`)}</div>
       <div class="fields">
         <${Field} label="Autre remise"><${NumIn} id="rm-pct" value=${d.remisePct} suffix="%" onSet=${(v) => set((d) => { d.remisePct = v ?? 0; })} /><//>
-        <${Field} label="Ou le prix que veut le client (HT)" hint="La remise se calcule toute seule"><${NumIn} id="rm-cible" placeholder=${fmt(c.totalHT, 0)} suffix="€" onCommit=${prixCible} /><//>
+        <${Field} label="Ou le prix que veut le client (HT)" hint="La remise se calcule toute seule"><${NumIn} id="rm-cible" placeholder=${fmt(c.totalHT, 0)} suffix=${devise()} onCommit=${prixCible} /><//>
       </div>
       <p class=${c.totalHT >= c.plancher ? 'mg-ok' : 'mg-bad'}><b>${c.totalHT >= c.plancher ? 'Remise possible jusqu\'à ' + pct(Math.max(0, rp), 0) + ' du prix de départ.' : 'Attention : ce prix est sous votre prix mini.'}</b> Prix mini : ${eur0(c.plancher)} HT.</p>
       ${expert() ? html`<div><button type="button" class="btn ghost sm" onClick=${() => setShowParams(!showParams)}>${showParams ? 'Masquer les tarifs de ce devis' : 'Tarifs de ce devis'}</button></div>` : null}
       ${showParams && expert() ? html`<div class="fields">
-        <${Field} label="Prix de l'heure"><${NumIn} id="pa-th" value=${d.params.tauxHoraire} suffix="€/h" onSet=${(v) => set((d) => { d.params.tauxHoraire = v; })} /><//>
-        <${Field} label="Coût de l'heure"><${NumIn} id="pa-ch" value=${d.params.coutHoraire} suffix="€/h" onSet=${(v) => set((d) => { d.params.coutHoraire = v; })} /><//>
+        <${Field} label="Prix de l'heure"><${NumIn} id="pa-th" value=${d.params.tauxHoraire} suffix=${devise() + "/h"} onSet=${(v) => set((d) => { d.params.tauxHoraire = v; })} /><//>
+        <${Field} label="Coût de l'heure"><${NumIn} id="pa-ch" value=${d.params.coutHoraire} suffix=${devise() + "/h"} onSet=${(v) => set((d) => { d.params.coutHoraire = v; })} /><//>
         <${Field} label="Marge sur produits"><${NumIn} id="pa-cf" value=${round2((num(d.params.coefFournitures) - 1) * 100)} suffix="%" onSet=${(v) => set((d) => { d.params.coefFournitures = 1 + num(v) / 100; })} /><//>
         <${Field} label="Perte de produit"><${NumIn} id="pa-pe" value=${round2(num(d.params.pertes) * 100)} suffix="%" onSet=${(v) => set((d) => { d.params.pertes = num(v) / 100; })} /><//>
         <${Field} label="TVA"><${NumIn} id="pa-tva" value=${d.params.tva} suffix="%" onSet=${(v) => set((d) => { d.params.tva = v; })} /><//>
@@ -899,7 +913,7 @@ function DevisEdit({ d, onBack, onDoc, onOpen }) {
 
     <div class="summary" aria-live="polite">
       <div class="main">
-        <div><div class="tot">${eur(c.totalHT)} <span class="small" style="font-weight:500">HT</span></div><div class="ttc">${eur(c.ttc)} TTC pour le client</div></div>
+        <div><div class="tot">${eur(c.totalHT)} <span class="small" style="font-weight:500">HT</span></div><div class="ttc">${num(d.params.tva) > 0 ? eur(c.ttc) + ' TTC pour le client' : 'Sans TVA'}</div></div>
         <div class="mgbox"><div class="small" style="opacity:.8">votre bénéfice</div><div class=${'mgv ' + (c.totalHT > 0 ? margeClass(c.margePct, mini) : '')}>${c.totalHT > 0 ? eur0(c.marge) + ' · ' + pct(c.margePct, 0) : '–'}</div></div>
       </div>
       ${c.totalHT > 0 ? html`<div class=${'sum-line ' + (c.totalHT >= c.plancher ? '' : 'mg-bad')}>${c.totalHT >= c.plancher
@@ -1007,7 +1021,9 @@ function DocClient({ d, onBack, go }) {
   const c = calcDevis(d);
   const e = state.settings.entreprise;
   const s = state.settings;
-  const manque = [!e.nom && 'le nom de votre entreprise', !e.adresse && 'votre adresse', !e.siret && 'votre SIRET', !e.assurance && 'votre assurance décennale'].filter(Boolean);
+  const manque = [!e.nom && 'le nom de votre entreprise', !e.adresse && 'votre adresse', !e.tel && 'votre téléphone', !e.brn && 'votre BRN',
+    num(d.params.tva) > 0 && !e.tvaNo && 'votre numéro de TVA'].filter(Boolean);
+  const avecTva = num(d.params.tva) > 0;
   return html`<div class="section">
     <div class="doc-bar no-print">
       <button type="button" class="btn ghost" onClick=${onBack}>${Icon.back} Retour au devis</button>
@@ -1019,9 +1035,9 @@ function DocClient({ d, onBack, go }) {
       <div class="dh">
         <div class="ent">
           <b>${e.nom || 'Votre entreprise'}</b><br />
-          ${e.adresse ? html`${e.adresse}<br />` : null}${e.cp || e.ville ? html`${e.cp} ${e.ville}<br />` : null}
+          ${e.adresse ? html`${e.adresse}<br />` : null}${e.ville ? html`${e.ville}, Maurice<br />` : null}
           ${e.tel ? html`Tél. ${e.tel}<br />` : null}${e.email ? html`${e.email}<br />` : null}
-          ${e.siret ? html`SIRET ${e.siret}` : null}
+          ${e.brn ? html`BRN ${e.brn}<br />` : null}${e.tvaNo && avecTva ? html`N° TVA ${e.tvaNo}` : null}
         </div>
         <div class="dref">
           <h1>Devis</h1>
@@ -1048,14 +1064,14 @@ function DocClient({ d, onBack, go }) {
       </table></div>
       <div class="totals">
         ${c.remise ? html`<span>Sous-total HT</span><span class="n">${eur(c.sousTotal)}</span><span>Remise ${fmt(d.remisePct)} %</span><span class="n">− ${eur(c.remise)}</span>` : null}
-        <span>Total HT</span><span class="n">${eur(c.totalHT)}</span>
+        ${avecTva ? html`<span>Total HT</span><span class="n">${eur(c.totalHT)}</span>
         <span>TVA ${fmt(d.params.tva)} %</span><span class="n">${eur(c.tva)}</span>
-        <span class="big">Total TTC</span><span class="n big">${eur(c.ttc)}</span>
+        <span class="big">Total TTC</span><span class="n big">${eur(c.ttc)}</span>` : html`<span class="big">Total</span><span class="n big">${eur(c.totalHT)}</span>`}
       </div>
       <div class="legal">
-        ${num(s.acompte) ? html`<p>Acompte de ${fmt(s.acompte)} % à la signature, soit ${eur(c.ttc * num(s.acompte) / 100)} TTC. Solde à la fin des travaux.</p>` : null}
-        ${num(d.params.tva) === 10 ? html`<p>TVA au taux réduit de 10 % : le client atteste que les travaux sont réalisés dans un logement achevé depuis plus de deux ans.</p>` : null}
-        ${e.assurance ? html`<p>Assurance décennale : ${e.assurance}</p>` : null}
+        ${num(s.acompte) ? html`<p>Acompte de ${fmt(s.acompte)} % à la signature, soit ${eur(c.ttc * num(s.acompte) / 100)}${avecTva ? ' TTC' : ''}. Solde à la fin des travaux.</p>` : null}
+        ${!avecTva ? html`<p>Entreprise non enregistrée à la TVA : pas de TVA sur ce devis.</p>` : null}
+        ${e.assurance ? html`<p>Assurance : ${e.assurance}</p>` : null}
         ${e.mentions ? html`<p>${e.mentions}</p>` : null}
         <p>Devis gratuit. Les fournitures sont comprises dans les prix indiqués.</p>
       </div>
@@ -1169,7 +1185,7 @@ function Produits() {
               <div class="pm"><span>${condLabel(p)}${num(p.contenance) && num(p.contenance) !== 1 ? ' · ' + eur(num(p.prix) / num(p.contenance)) + '/' + p.unite : ''}</span>
                 ${ageDays(p.maj) > 180 ? html`<span class="old">prix du ${dateFr(p.maj)}, à vérifier</span>` : null}</div>
             </div>
-            <${NumIn} id=${'pp-' + p.id} value=${p.prix} suffix="€" onCommit=${(v) => { const ancien = p.prix; if (setPrix(p, v)) toast('Prix enregistré (avant : ' + eur(num(ancien)) + ')'); }} />
+            <${NumIn} id=${'pp-' + p.id} value=${p.prix} suffix=${devise()} onCommit=${(v) => { const ancien = p.prix; if (setPrix(p, v)) toast('Prix enregistré (avant : ' + eur(num(ancien)) + ')'); }} />
           </div>`)}</div>`)}
     </div>
     <p class="hint">Touchez un prix pour le changer : l'ancien est gardé. Les devis déjà envoyés ne changent pas.</p>
@@ -1218,7 +1234,7 @@ function ProduitEdit({ p, onClose }) {
       <${Field} label="Nom du produit" wide><${TextIn} id=${'pe-n-' + p.id} value=${p.nom} placeholder="Ex. Peinture velours blanc 15 L" onSet=${(v) => set((p) => { p.nom = v; })} /><//>
       <${Field} label="Vendu par"><input id=${'pe-u-' + p.id} type="text" list="unites" value=${p.unite} onInput=${(e) => set((p) => { p.unite = e.target.value; })} /><//>
       <${Field} label=${'Taille du pot / sac (en ' + (p.unite || 'unités') + ')'} hint=${'Ex. 15 pour un pot de 15 ' + p.unite}><${NumIn} id=${'pe-ct-' + p.id} value=${p.contenance} onSet=${(v) => set((p) => { p.contenance = v; })} /><//>
-      <${Field} label="Prix d'achat HT"><${NumIn} id=${'pe-p-' + p.id} value=${p.prix} suffix="€" onCommit=${(v) => setPrix(p, v)} /><//>
+      <${Field} label="Prix d'achat HT"><${NumIn} id=${'pe-p-' + p.id} value=${p.prix} suffix=${devise()} onCommit=${(v) => setPrix(p, v)} /><//>
       <${Field} label=${'m² couverts avec 1 ' + (p.unite || 'unité')} hint="Pour une couche (voir la fiche du produit)"><${NumIn} id=${'pe-r-' + p.id} value=${p.rendement} placeholder="ex. 10" onSet=${(v) => set((p) => { p.rendement = v; })} /><//>
       <${Field} label="Rangé dans"><input id=${'pe-c-' + p.id} type="text" list="cats" value=${p.categorie} onInput=${(e) => set((p) => { p.categorie = e.target.value; })} /><//>
       ${plus ? html`
@@ -1462,27 +1478,28 @@ function Reglages() {
       <div class="fields">
         <${Field} label="Nom de l'entreprise" wide><${TextIn} id="e-nom" value=${e.nom} placeholder="Ex. Etienne Peinture" onSet=${(v) => set((st) => { st.entreprise.nom = v; })} /><//>
         <${Field} label="Adresse" wide><${TextIn} id="e-adr" value=${e.adresse} onSet=${(v) => set((st) => { st.entreprise.adresse = v; })} /><//>
-        <${Field} label="Code postal"><${TextIn} id="e-cp" value=${e.cp} onSet=${(v) => set((st) => { st.entreprise.cp = v; })} /><//>
-        <${Field} label="Ville"><${TextIn} id="e-ville" value=${e.ville} onSet=${(v) => set((st) => { st.entreprise.ville = v; })} /><//>
+        <${Field} label="Ville ou village"><${TextIn} id="e-ville" value=${e.ville} placeholder="Ex. Curepipe" onSet=${(v) => set((st) => { st.entreprise.ville = v; })} /><//>
         <${Field} label="Téléphone"><${TextIn} id="e-tel" type="tel" value=${e.tel} onSet=${(v) => set((st) => { st.entreprise.tel = v; })} /><//>
         <${Field} label="E-mail"><${TextIn} id="e-mail" type="email" value=${e.email} onSet=${(v) => set((st) => { st.entreprise.email = v; })} /><//>
-        <${Field} label="SIRET"><${TextIn} id="e-siret" value=${e.siret} onSet=${(v) => set((st) => { st.entreprise.siret = v; })} /><//>
-        <${Field} label="Assurance décennale (obligatoire)" hint="Nom de l'assureur, n° de contrat, zone couverte" wide><${TextIn} id="e-ass" value=${e.assurance} onSet=${(v) => set((st) => { st.entreprise.assurance = v; })} /><//>
+        <${Field} label="BRN" hint="Business Registration Number"><${TextIn} id="e-brn" value=${e.brn} onSet=${(v) => set((st) => { st.entreprise.brn = v; })} /><//>
+        <${Field} label="N° de TVA (VAT)" hint="Seulement si vous êtes enregistré à la TVA"><${TextIn} id="e-tvano" value=${e.tvaNo} onSet=${(v) => set((st) => { st.entreprise.tvaNo = v; })} /><//>
+        <${Field} label="Assurance (facultatif)" hint="Nom de l'assureur et n° de contrat, si vous voulez l'afficher" wide><${TextIn} id="e-ass" value=${e.assurance} onSet=${(v) => set((st) => { st.entreprise.assurance = v; })} /><//>
         ${expert() ? html`<${Field} label="Texte en bas de devis" wide><textarea id="e-ment" value=${e.mentions} onInput=${(ev) => set((st) => { st.entreprise.mentions = ev.target.value; })}></textarea><//>` : null}
       </div>
     </div>
     <div class="card">
       <span class="tape">Mes prix</span>
       <div class="fields">
-        <${Field} label="Prix de l'heure pour le client"><${NumIn} id="s-th" value=${st.tauxHoraire} suffix="€/h" onSet=${(v) => set((st) => { st.tauxHoraire = v; })} /><//>
-        <${Field} label="Ce que vous coûte une heure" hint="Charges, camion, assurance, votre salaire…"><${NumIn} id="s-ch" value=${st.coutHoraire} suffix="€/h" onSet=${(v) => set((st) => { st.coutHoraire = v; })} /><//>
-        <${Field} label="TVA" hint="10 % en rénovation de logement"><${NumIn} id="s-tva" value=${st.tva} suffix="%" onSet=${(v) => set((st) => { st.tva = v; })} /><//>
+        <${Field} label="Prix de l'heure pour le client"><${NumIn} id="s-th" value=${st.tauxHoraire} suffix=${devise() + "/h"} onSet=${(v) => set((st) => { st.tauxHoraire = v; })} /><//>
+        <${Field} label="Ce que vous coûte une heure" hint="Charges, camion, assurance, votre salaire…"><${NumIn} id="s-ch" value=${st.coutHoraire} suffix=${devise() + "/h"} onSet=${(v) => set((st) => { st.coutHoraire = v; })} /><//>
+        <${Field} label="TVA" hint="15 % à Maurice. Mettez 0 si vous n'êtes pas enregistré à la TVA (MRA)."><${NumIn} id="s-tva" value=${st.tva} suffix="%" onSet=${(v) => set((st) => { st.tva = v; })} /><//>
         <${Field} label="Acompte à la signature"><${NumIn} id="s-ac" value=${st.acompte} suffix="%" onSet=${(v) => set((st) => { st.acompte = v; })} /><//>
         ${expert() ? html`
           <${Field} label="Marge sur les produits" hint="Ajoutée au prix d'achat des produits"><${NumIn} id="s-cf" value=${round2((num(st.coefFournitures) - 1) * 100)} suffix="%" onSet=${(v) => set((st) => { st.coefFournitures = 1 + num(v) / 100; })} /><//>
           <${Field} label="Perte de produit" hint="Fond de pot, rouleau, retouches"><${NumIn} id="s-pe" value=${round2(num(st.pertes) * 100)} suffix="%" onSet=${(v) => set((st) => { st.pertes = num(v) / 100; })} /><//>
           <${Field} label="Bénéfice minimum" hint="En dessous : prix mini dépassé"><${NumIn} id="s-mm" value=${round2(num(st.margeMini) * 100)} suffix="%" onSet=${(v) => set((st) => { st.margeMini = num(v) / 100; })} /><//>
           <${Field} label="Devis valable"><${NumIn} id="s-val" value=${st.validite} suffix="jours" onSet=${(v) => set((st) => { st.validite = v; })} /><//>
+          <${Field} label="Symbole de la monnaie" hint="Rs pour la roupie mauricienne"><${TextIn} id="s-dev" value=${st.devise} onSet=${(v) => set((st) => { st.devise = v.trim() || 'Rs'; })} /><//>
           <${Field} label="Prochain n° de devis"><${NumIn} id="s-num" value=${st.prochainNumero} onSet=${(v) => { if (v != null && v >= 1) set((st) => { st.prochainNumero = Math.round(v); }); }} /><//>` : null}
       </div>
       <label class="switch"><input id="s-expert" type="checkbox" checked=${!!st.expert} onChange=${(ev) => set((st) => { st.expert = ev.target.checked; })} /><span>Afficher les réglages avancés (marge produits, pertes, import Excel…)</span></label>

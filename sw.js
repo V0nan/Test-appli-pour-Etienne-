@@ -1,6 +1,6 @@
 // Cache hors ligne : l'appli s'ouvre même sans réseau (sur le chantier).
 // Changer VERSION à chaque mise en ligne d'une nouvelle version.
-const VERSION = 'v3';
+const VERSION = 'v4';
 const FILES = ['./', 'index.html', 'src/app.js', 'src/style.css', 'vendor/htm-preact-3.1.1.umd.js', 'manifest.webmanifest', 'icon.svg', 'icon-180.png'];
 const DELAI_RESEAU = 3000; // au-delà, on sert la version en cache (réseau faible sur chantier)
 
