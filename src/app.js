@@ -80,6 +80,8 @@ function load() {
     return seed();
   }
 }
+// Demande au navigateur de ne pas effacer les données quand le téléphone manque de place
+try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); } catch (e) {}
 // Autre onglet / fenêtre : on recharge au lieu d'écraser son travail
 window.addEventListener('storage', (e) => {
   if (e.key !== KEY || !e.newValue) return;
