@@ -4,6 +4,40 @@ Petit outil de devis pour peintre / décorateur : on saisit les métrés pièce 
 
 Fonctionne sur téléphone, tablette et ordinateur, **sans compte, sans serveur et sans connexion** une fois ouverte.
 
+## Contexte du projet
+
+**Pour qui.** Etienne est peintre et décorateur, à son compte, à l'île Maurice. Il n'utilise pas beaucoup d'outils numériques. Aujourd'hui, il fait ses métrés sur chantier et calcule ses devis à la main dans un cahier, à partir de sa propre base de prix (peintures, sous-couches, enduits, bâches, scotch…).
+
+**Ce qu'on cherche.**
+1. **Gagner du temps** sur les métrés et le chiffrage.
+2. **Tirer les leçons des devis passés** : quelle marge sur les devis signés et refusés, combien de remise accordée, temps prévu et temps réel. Le but est de savoir **jusqu'où il peut négocier**.
+3. **Mettre à jour facilement** sa base de produits et leurs prix.
+4. Le tout **très simple à utiliser**, surtout sur téléphone et sur chantier. C'est la condition pour qu'il l'adopte.
+
+**Choix faits, et pourquoi.**
+- **Appli web installable, sans compte ni serveur.** Rien à payer, rien à administrer, et l'appli marche sans réseau sur chantier. Les données restent sur son téléphone, d'où la sauvegarde mensuelle (voir plus bas).
+- **Chaque devis garde les prix du jour où il a été fait.** Changer un prix dans la base ne fausse pas le bilan des anciens devis.
+- **Le coût des produits compte les pots entiers achetés**, le prix de vente seulement ce qui est utilisé. La marge est donc prudente. Le détail du prix affiche la part de produit qui restera en stock.
+- **Vocabulaire du métier plutôt que de la gestion** : « Travaux » plutôt qu'« ouvrages », « bénéfice » plutôt que « marge nette », « prix mini » plutôt que « prix plancher », « m² faits en 1 heure » plutôt que « heures par m² ». Les réglages techniques sont masqués par défaut.
+- **Adapté à l'île Maurice** : roupies (Rs), TVA 15 % (ou sans TVA), BRN sur le devis. Pas de mentions propres à la France (TVA 10 %, assurance décennale).
+
+**Historique.**
+1. Première version : devis, produits, travaux, bilan et réglages.
+2. **Relecture indépendante du code** par un second agent, puis corrections : centimes du devis client, import Excel (produits de même nom, prix vides, accents des fichiers Windows), protection contre la perte de données, numéros de devis en double.
+3. **Audit d'ergonomie** pour un utilisateur peu à l'aise avec ces outils, puis simplification : écran de premiers pas, boutons rapides, compteurs portes et fenêtres, remise en un geste, bilan en 3 phrases, grandes zones tactiles.
+4. Passage aux roupies et aux règles mauriciennes.
+
+## Où en est le projet
+
+- [x] Appli fonctionnelle, testée dans un navigateur (téléphone et ordinateur, mode clair et sombre).
+- [ ] **Mise en ligne** : le dépôt est privé. Le passer en public, puis activer GitHub Pages (voir « Mise en ligne »).
+- [ ] **Test par Etienne** sur son téléphone, sans aide, en notant où il bloque.
+- [ ] **Saisir ses vrais chiffres** : prix des produits, vitesse de travail en m² à l'heure, prix et coût de l'heure. Les valeurs actuelles sont des **exemples inventés**.
+- [ ] **Questions ouvertes** :
+  - écrit-il « 3,500 » (habitude mauricienne) ou « 3 500 » pour trois mille cinq cents ? L'appli suit aujourd'hui l'usage français, où la virgule sert aux décimales ;
+  - est-il enregistré à la TVA ? Si non, mettre la TVA à 0 ;
+  - que contient son devis papier actuel qui manquerait ici ?
+
 ## Ce que fait l'appli
 
 | Onglet | À quoi ça sert |
@@ -23,7 +57,7 @@ Au premier lancement, un écran « 3 étapes » guide le démarrage (entreprise,
 Pour chaque ligne du devis :
 
 - **quantité** = surface de la pièce (ou quantité saisie à la main)
-- **heures** = quantité × temps de l'ouvrage
+- **heures** = quantité ÷ m² faits en 1 heure (réglé dans « Travaux »)
 - **fournitures** = quantité × (couches ÷ rendement du produit) × (1 + pertes) × prix d'achat
 - **prix de vente** = heures × prix de l'heure + fournitures × (1 + marge sur produits)
 - le prix unitaire est arrondi au centime, puis multiplié par la quantité : le devis client tombe juste
@@ -43,9 +77,16 @@ L'onglet **Bilan** compare ensuite tout ça et indique ce que les clients accept
 
 ## Mise en ligne (GitHub Pages, gratuit)
 
-1. Sur GitHub : **Settings → Pages → Source : Deploy from a branch**, choisir la branche et le dossier `/ (root)`.
-2. L'appli est alors disponible à l'adresse `https://<compte>.github.io/Test-appli-pour-Etienne-/`.
-3. Sur le téléphone, ouvrir cette adresse puis **Ajouter à l'écran d'accueil** : l'appli s'ouvre comme une vraie appli et marche hors connexion.
+GitHub Pages n'est gratuit que pour un dépôt **public**. Passer le dépôt en public ne montre que le code : les données des utilisateurs restent sur leur téléphone et ne sont jamais sur GitHub. Si le code doit rester privé, deux solutions : Netlify Drop (gratuit, en glissant le dossier sur app.netlify.com/drop) ou GitHub Pro (payant).
+
+1. **Settings → General → Danger Zone → Change visibility → Public.**
+2. **Settings → Pages → Source : Deploy from a branch**, branche `claude/outil-devis-peintre`, dossier `/ (root)`, puis **Save**.
+3. Au bout d'1 à 2 minutes, l'appli est disponible à l'adresse `https://v0nan.github.io/Test-appli-pour-Etienne-/`.
+4. Sur le téléphone, ouvrir cette adresse puis **Ajouter à l'écran d'accueil** :
+   - iPhone : Safari → Partager → « Sur l'écran d'accueil » ;
+   - Android : Chrome → ⋮ → « Installer l'appli ».
+
+   Sur iPhone, c'est indispensable : sinon Safari peut effacer les données d'un site qu'on n'a pas ouvert depuis quelques jours.
 
 Pour essayer en local : `python3 -m http.server` dans le dossier, puis ouvrir http://localhost:8000.
 
