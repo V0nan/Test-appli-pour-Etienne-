@@ -6,7 +6,7 @@ Fonctionne sur téléphone, tablette et ordinateur, **sans compte, sans serveur 
 
 ## Contexte du projet
 
-**Pour qui.** Etienne est peintre et décorateur, à son compte, à l'île Maurice. Il n'utilise pas beaucoup d'outils numériques. Aujourd'hui, il fait ses métrés sur chantier et calcule ses devis à la main dans un cahier, à partir de sa propre base de prix (peintures, sous-couches, enduits, bâches, scotch…).
+**Pour qui.** un peintre et décorateur, à son compte, à l'île Maurice. Il n'utilise pas beaucoup d'outils numériques. Aujourd'hui, il fait ses métrés sur chantier et calcule ses devis à la main dans un cahier, à partir de sa propre base de prix (peintures, sous-couches, enduits, bâches, scotch…).
 
 **Ce qu'on cherche.**
 1. **Gagner du temps** sur les métrés et le chiffrage.
@@ -31,7 +31,7 @@ Fonctionne sur téléphone, tablette et ordinateur, **sans compte, sans serveur 
 
 - [x] Appli fonctionnelle, testée dans un navigateur (téléphone et ordinateur, mode clair et sombre).
 - [ ] **Mise en ligne** : le dépôt est privé. Le passer en public, puis activer GitHub Pages (voir « Mise en ligne »).
-- [ ] **Test par Etienne** sur son téléphone, sans aide, en notant où il bloque.
+- [ ] **Test par utilisateur ** sur son téléphone, sans aide, en notant où il bloque.
 - [ ] **Saisir ses vrais chiffres** : prix des produits, vitesse de travail en m² à l'heure, prix et coût de l'heure. Les valeurs actuelles sont des **exemples inventés**.
 - [ ] **Questions ouvertes** :
   - écrit-il « 3,500 » (habitude mauricienne) ou « 3 500 » pour trois mille cinq cents ? L'appli suit aujourd'hui l'usage français, où la virgule sert aux décimales ;
