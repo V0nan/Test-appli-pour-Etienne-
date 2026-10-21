@@ -1,0 +1,12 @@
+{
+  "name": "Métré & Devis",
+  "short_name": "Devis",
+  "description": "Métrés, devis et suivi des marges pour peintre décorateur",
+  "lang": "fr",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f5f2",
+  "theme_color": "#1f5f6b",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
