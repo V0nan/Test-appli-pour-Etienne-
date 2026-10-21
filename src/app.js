@@ -88,11 +88,30 @@ window.addEventListener('storage', (e) => {
 // Complète les données incomplètes (anciennes versions, fichiers abîmés) pour que l'appli ne plante pas
 function migrate(s) {
   if (!s || typeof s !== 'object') throw new Error('Données invalides');
-  if (s.settings && !s.settings.devise) {
-    // Version d'avant le passage en roupies : si ce ne sont que des exemples, on repart des exemples mauriciens
+  if (s.settings && !s.settings.maurice) {
+    // Version d'avant le passage en roupies : tout passe en roupies (réglages, exemples)
     const vrais = (s.devis || []).some((d) => d && !d.exemple) || (s.produits || []).some((p) => p && !p.exemple);
     if (!vrais) return seed();
-    s.settings.devise = '€';
+    const ref = seed();
+    const st = s.settings;
+    st.devise = 'Rs'; st.maurice = true;
+    if (num(st.tauxHoraire) < 100) st.tauxHoraire = ref.settings.tauxHoraire;
+    if (num(st.coutHoraire) < 100) st.coutHoraire = ref.settings.coutHoraire;
+    if (num(st.tva) === 10) st.tva = 15;
+    if (st.entreprise) { if (st.entreprise.siret && !st.entreprise.brn) st.entreprise.brn = st.entreprise.siret; delete st.entreprise.siret; delete st.entreprise.cp; }
+    // Produits et travaux d'exemple remplacés par les versions en roupies
+    const garde = (arr) => (arr || []).filter((x) => x && !x.exemple);
+    s.produits = [...ref.produits.filter((p) => !garde(s.produits).some((x) => x.id === p.id)), ...garde(s.produits)];
+    s.ouvrages = [...ref.ouvrages.filter((o) => !garde(s.ouvrages).some((x) => x.id === o.id)), ...garde(s.ouvrages)];
+    // Devis : les exemples sont refaits, les devis saisis passent aux tarifs mauriciens
+    s.devis = [...ref.devis, ...garde(s.devis).map((d) => {
+      d.params = Object.assign({}, d.params || {}, paramsFromSettings(st));
+      for (const p of d.pieces || []) for (const l of p.lignes || []) {
+        const o = ref.ouvrages.find((x) => x.id === l.ouvrage?.id);
+        if (o) l.ouvrage = snapOuvrage(o, s.produits);
+      }
+      return d;
+    })];
   }
   const base = defaultSettings();
   const arr = (x) => (Array.isArray(x) ? x : []);
@@ -158,6 +177,7 @@ function defaultSettings() {
       assurance: '', mentions: '',
     },
     devise: 'Rs', // roupie mauricienne
+    maurice: true, // réglages adaptés à l'île Maurice
     tauxHoraire: 600, // prix de vente de l'heure de main d'œuvre (HT)
     coutHoraire: 350, // ce que coûte réellement une heure (charges, véhicule, etc.)
     coefFournitures: 1.25, // coefficient appliqué au prix d'achat des fournitures
