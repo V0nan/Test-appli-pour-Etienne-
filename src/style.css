@@ -5,7 +5,7 @@
   --surface: #ffffff;
   --surface-2: #eef1ee;
   --ink: #1b272c;
-  --muted: #5a686c;
+  --muted: #4b585c;
   --line: #d6ddd9;
   --accent: #1f5f6b;
   --accent-soft: #dcebec;
@@ -329,3 +329,78 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: .92rem; }
 }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* =========================================================================
+   Ergonomie chantier : grandes zones tactiles, libellés lisibles
+   ========================================================================= */
+* { -webkit-tap-highlight-color: transparent; }
+.lab { font-size: .9rem; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--ink); }
+.hint { font-size: .88rem; }
+.muted { color: var(--muted); }
+input::placeholder { opacity: 1; }
+.btn { min-height: 44px; }
+.btn.sm { min-height: 40px; padding: 8px 12px; font-size: .92rem; }
+.btn.big { min-height: 52px; font-size: 1.05rem; padding: 12px 18px; }
+.btn:active, .chip:active, .cbtn:active { transform: translateY(1px); }
+.btn:disabled { opacity: .5; cursor: default; }
+.chip { min-height: 40px; padding: 8px 14px; font-size: .95rem; }
+.chip.big { min-height: 46px; padding: 10px 16px; font-weight: 600; }
+.chip.add { border-style: dashed; border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.x { min-width: 44px; min-height: 44px; font-size: 1.5rem; display: inline-flex; align-items: center; justify-content: center; }
+.linkbtn { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font-size: inherit; }
+.tabs button { min-height: 56px; }
+.tabs button:active { background: var(--accent-soft); }
+.status-bar button { min-height: 48px; font-size: 1rem; }
+.status-bar button.on.st-accepte::before { content: "✓ "; }
+.pill.st-todo { background: var(--warn-soft); color: var(--warn); }
+
+/* Accueil */
+.welcome h2 { font-size: 1.6rem; }
+.steps { display: flex; flex-direction: column; gap: 16px; }
+.step { display: flex; gap: 14px; align-items: flex-start; }
+.step-n { flex: none; width: 36px; height: 36px; border-radius: 50%; background: var(--tape); color: var(--tape-ink); font-family: var(--font-cond); font-weight: 700; font-size: 1.2rem; display: flex; align-items: center; justify-content: center; }
+.step.done .step-n { background: var(--ok); color: var(--surface); }
+.step.done .step-n::after { content: "✓"; margin-left: 2px; }
+
+/* Pièces */
+.piece-tot { font-weight: 700; font-size: 1.1rem; }
+.ouvertures { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: flex-end; }
+.ouvertures .lab { flex-basis: 100%; }
+.ouvertures .field { flex: 1 1 140px; }
+.counter { display: flex; align-items: center; gap: 6px; background: var(--surface-2); border-radius: 10px; padding: 4px 4px 4px 12px; }
+.counter b { min-width: 1.4em; text-align: center; font-size: 1.1rem; }
+.cbtn { width: 44px; height: 44px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); font-size: 1.4rem; font-weight: 600; cursor: pointer; color: var(--ink); }
+.cbtn:disabled { opacity: .35; }
+.ligne input.num { color: var(--ink); font-weight: 600; }
+.ligne .sub { font-size: .88rem; }
+
+/* Résumé */
+.summary .sum-line { font-size: .95rem; }
+.summary .sum-line.mg-bad { color: #ff9b90; font-weight: 600; }
+.summary .toggle { min-height: 40px; font-size: .95rem; text-align: left; }
+.summary .sub-dt { opacity: .7; font-size: .85rem; padding-left: 10px; }
+.big-line { font-size: 1.05rem; }
+
+/* Bilan */
+.headline p { font-size: 1.15rem; }
+.headline b { font-family: var(--font-cond); font-size: 1.45rem; }
+@media (max-width: 560px) {
+  table.tbl.cards thead { display: none; }
+  table.tbl.cards, table.tbl.cards tbody, table.tbl.cards tr, table.tbl.cards td { display: block; width: 100%; }
+  table.tbl.cards tr { border-bottom: 1px solid var(--line); padding: 8px 0; }
+  table.tbl.cards td { border: 0; padding: 3px 0; text-align: left; }
+  table.tbl.cards td.n { display: flex; justify-content: space-between; gap: 10px; }
+  table.tbl.cards td[data-label]::before { content: attr(data-label); color: var(--muted); font-weight: 400; }
+}
+
+/* Divers */
+.edit-card { border-color: var(--accent); border-width: 2px; }
+.switch { display: flex; gap: 10px; align-items: center; cursor: pointer; min-height: 44px; }
+.switch input { width: 22px; height: 22px; flex: none; accent-color: var(--accent); }
+.toast {
+  top: calc(12px + env(safe-area-inset-top, 0px)); bottom: auto;
+  display: flex; gap: 14px; align-items: center; font-size: 1rem;
+}
+.toast-btn { background: none; border: 1px solid currentColor; color: inherit; border-radius: 6px; padding: 6px 12px; font-weight: 700; cursor: pointer; min-height: 40px; }
+input[type="search"] { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font-size: 1rem; }
+.stack > .btn, .card > .btn { white-space: normal; text-align: center; }

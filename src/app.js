@@ -34,19 +34,19 @@ const ageDays = (d) => (d ? (Date.now() - new Date(d + 'T12:00:00').getTime()) /
 const norm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
 
 const BASES = {
-  murs: { label: 'Murs', unite: 'm²' },
-  plafond: { label: 'Plafond', unite: 'm²' },
-  sol: { label: 'Sol', unite: 'm²' },
-  perimetre: { label: 'Périmètre (plinthes, masquage)', unite: 'ml' },
-  unite: { label: "À l'unité (porte, radiateur…)", unite: 'u' },
-  forfait: { label: 'Forfait', unite: 'forfait' },
+  murs: { label: 'Les murs (m²)', unite: 'm²' },
+  plafond: { label: 'Le plafond (m²)', unite: 'm²' },
+  sol: { label: 'Le sol (m²)', unite: 'm²' },
+  perimetre: { label: 'Le tour de la pièce (plinthes, scotch)', unite: 'm' },
+  unite: { label: "À la pièce (porte, radiateur…)", unite: 'u' },
+  forfait: { label: 'Un prix fixe (forfait)', unite: 'forfait' },
 };
 const CATEGORIES = ['Peinture', 'Sous-couche', 'Enduit', 'Revêtement', 'Protection', 'Adhésif / mastic', 'Outillage / consommable', 'Autre'];
 const UNITES = ['L', 'kg', 'm²', 'ml', 'rouleau', 'pièce', 'lot'];
 const STATUTS = {
-  brouillon: 'Brouillon',
+  brouillon: 'En cours',
   envoye: 'Envoyé',
-  accepte: 'Accepté',
+  accepte: 'Signé',
   refuse: 'Refusé',
 };
 const PIECES_COURANTES = ['Salon', 'Séjour', 'Cuisine', 'Chambre', 'Chambre 2', 'Salle de bain', 'WC', 'Couloir', 'Entrée', 'Bureau', 'Cage d\'escalier', 'Buanderie'];
@@ -129,17 +129,19 @@ function useStore() {
 
 let toastTimer;
 let toastMsg = '';
-function toast(msg) {
+let toastAction = null; // { label, fn } : ex. « Annuler »
+function toast(msg, action) {
   toastMsg = msg;
+  toastAction = action || null;
   listeners.forEach((l) => l());
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toastMsg = ''; listeners.forEach((l) => l()); }, 2800);
+  toastTimer = setTimeout(() => { toastMsg = ''; toastAction = null; listeners.forEach((l) => l()); }, action ? 6000 : 2800);
 }
 
 function defaultSettings() {
   return {
     entreprise: {
-      nom: 'Etienne Peinture & Décoration', adresse: '', cp: '', ville: '', tel: '', email: '', siret: '',
+      nom: '', adresse: '', cp: '', ville: '', tel: '', email: '', siret: '',
       assurance: '', mentions: '',
     },
     tauxHoraire: 45, // prix de vente de l'heure de main d'œuvre (HT)
@@ -152,6 +154,8 @@ function defaultSettings() {
     acompte: 30,
     prochainNumero: 1,
     derniereSauvegarde: null,
+    expert: false, // affiche les réglages avancés
+    demarre: false, // l'accueil « premiers pas » a été passé
   };
 }
 
@@ -238,6 +242,7 @@ function calcDevis(d) {
     return { ...e, nb, cout: nb * num(e.produit.prix) };
   }).filter((e) => e.besoin > 0);
   const coutFourn = sum(courses, (e) => e.cout);
+  const coutFournUtilise = sum(all, (x) => x.c.coutFourn);
   const heures = sum(all, (x) => x.c.heures);
   const coutMO = heures * num(pr.coutHoraire);
   const diversVente = sum(d.divers, (x) => round2(num(x.vente)));
@@ -249,11 +254,12 @@ function calcDevis(d) {
   const margeBrute = totalHT - coutFourn - diversCout; // ce qui reste pour payer le temps passé
   const marge = totalHT - coutTotal;
   const margePct = totalHT > 0 ? marge / totalHT : 0;
-  const plancher = coutTotal / (1 - Math.min(0.9, num(pr.margeMini)));
+  const plancher = round2(coutTotal / (1 - Math.min(0.9, num(pr.margeMini))));
+  const remisePossible = sousTotal > 0 ? 1 - plancher / sousTotal : 0;
   const tva = round2(totalHT * num(pr.tva) / 100);
   const res = {
-    pieces, courses, coutFourn, heures, coutMO, diversVente, diversCout, sousTotal, remise, totalHT,
-    coutTotal, margeBrute, marge, margePct, plancher, nego: totalHT - plancher, tva, ttc: totalHT + tva,
+    pieces, courses, coutFourn, stock: Math.max(0, coutFourn - coutFournUtilise), heures, coutMO, diversVente, diversCout, sousTotal, remise, totalHT,
+    coutTotal, margeBrute, marge, margePct, plancher, remisePossible, nego: totalHT - plancher, tva, ttc: totalHT + tva,
   };
   // Résultat réel (devis signé + retour de chantier)
   if (d.statut === 'accepte') {
@@ -326,7 +332,7 @@ function nouveauDevis(s) {
   return {
     id: uid(), numero: numeroDevis(s), date: today(), statut: 'brouillon',
     client: { nom: '', adresse: '', tel: '', email: '' }, chantier: '', objet: 'Travaux de peinture',
-    pieces: [nouvellePiece('Pièce 1')], divers: [], remisePct: 0,
+    pieces: [nouvellePiece('')], divers: [], remisePct: 0,
     params: paramsFromSettings(s.settings), signe: null, rex: null, notes: '',
   };
 }
@@ -396,18 +402,18 @@ function seed() {
     s.devis.push(d);
   };
   const std = ['o1', 'o2', 'o3', 'o6', 'o7'];
-  mk({ client: 'Mme Martin (exemple)', objet: 'Peinture salon et couloir', jours: 190, statut: 'accepte', signeCoef: 0.95, rexCoef: 1.12,
+  mk({ client: 'Mme Martin', objet: 'Peinture salon et couloir', jours: 190, statut: 'accepte', signeCoef: 0.95, rexCoef: 1.12,
     pieces: [['Salon', 5.2, 4.1, 2.5, 5.4, std], ['Couloir', 6, 1.1, 2.5, 4.8, ['o1', 'o3', 'o6', 'o7', ['o8', 3]]]] });
-  mk({ client: 'M. Durand (exemple)', objet: 'Rénovation chambre', jours: 150, statut: 'refuse', taux: 55,
+  mk({ client: 'M. Durand', objet: 'Rénovation chambre', jours: 150, statut: 'refuse', taux: 55,
     pieces: [['Chambre', 3.8, 3.2, 2.5, 3.4, ['o1', 'o2', 'o4', 'o5', 'o6', 'o7']]] });
-  mk({ client: 'SCI Les Tilleuls (exemple)', objet: 'Remise en peinture T3 avant location', jours: 110, statut: 'accepte', signeCoef: 0.97, rexCoef: 1.05,
+  mk({ client: 'SCI Les Tilleuls', objet: 'Remise en peinture T3 avant location', jours: 110, statut: 'accepte', signeCoef: 0.97, rexCoef: 1.05,
     divers: [{ designation: 'Évacuation des déchets', vente: 80, cout: 35 }],
     pieces: [['Séjour', 5.8, 4.2, 2.5, 6, std], ['Chambre', 3.5, 3.1, 2.5, 3.2, std], ['Chambre 2', 3.2, 3, 2.5, 3.2, std], ['Couloir', 4.5, 1.1, 2.5, 6.4, ['o1', 'o6', 'o7', ['o8', 4]]]] });
-  mk({ client: 'M. Petit (exemple)', objet: 'Cuisine et entrée', jours: 75, statut: 'refuse', taux: 52, remisePct: 0,
+  mk({ client: 'M. Petit', objet: 'Cuisine et entrée', jours: 75, statut: 'refuse', taux: 52, remisePct: 0,
     pieces: [['Cuisine', 3.6, 2.8, 2.5, 4.5, ['o1', 'o2', 'o4', 'o5', 'o6', 'o7']], ['Entrée', 2.2, 1.6, 2.5, 3.6, ['o1', 'o3', 'o6', 'o7']]] });
-  mk({ client: 'Mme Leroy (exemple)', objet: 'Chambre enfant, toile de verre', jours: 40, statut: 'accepte', signeCoef: 0.92, rexCoef: 0.97,
+  mk({ client: 'Mme Leroy', objet: 'Chambre enfant, toile de verre', jours: 40, statut: 'accepte', signeCoef: 0.92, rexCoef: 0.97,
     pieces: [['Chambre enfant', 3.4, 3, 2.5, 3.3, ['o1', 'o2', 'o3', 'o10', 'o6', 'o7', ['o8', 1]]]] });
-  mk({ client: 'M. Bernard (exemple)', objet: 'Séjour double', jours: 6, statut: 'envoye',
+  mk({ client: 'M. Bernard', objet: 'Séjour double', jours: 6, statut: 'envoye',
     pieces: [['Séjour', 7.4, 4.6, 2.6, 8.2, [...std, 'o9', 'o11']]] });
   s.settings.prochainNumero = s.devis.length + 1;
   return s;
@@ -592,6 +598,45 @@ const Logo = () => html`<svg class="brand-mark" viewBox="0 0 40 40" aria-hidden=
 /* =========================================================================
    Application
    ========================================================================= */
+const expert = () => !!state.settings.expert;
+
+// Un devis à peine ouvert puis abandonné ne doit pas encombrer la liste
+function estVide(d) {
+  return !d.client.nom && !d.client.tel && !d.client.adresse && !d.divers.length
+    && d.pieces.every((p) => !p.lignes.length && !num(p.L) && !num(p.l));
+}
+function retirerSiVide(id) {
+  const d = state.devis.find((x) => x.id === id);
+  if (!d || d.statut !== 'brouillon' || !estVide(d)) return;
+  update((s) => {
+    s.devis = s.devis.filter((x) => x !== d);
+    const n = parseInt(d.numero.split('-')[1], 10);
+    if (n === num(s.settings.prochainNumero) - 1) s.settings.prochainNumero = n; // on rend le numéro
+  });
+}
+
+// Sauvegarde : sur téléphone on propose « Partager » (mail, WhatsApp…), sinon téléchargement
+async function sauvegarder() {
+  const txt = exportSauvegarde();
+  const nom = 'metre-devis-sauvegarde-' + today() + '.json';
+  try {
+    const file = new File([txt], nom, { type: 'application/json' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: 'Sauvegarde Métré & Devis' });
+      marquerSauvegarde(); toast('Sauvegarde envoyée');
+      return;
+    }
+  } catch (e) { if (e && e.name === 'AbortError') return; }
+  if (download(nom, txt, 'application/json')) { marquerSauvegarde(); toast('Sauvegarde téléchargée'); }
+  else toast('Sauvegarde impossible ici : utilisez « Copier les données » dans Réglages');
+}
+function sauvegardeEnRetard() {
+  const vrais = state.devis.filter((d) => !d.exemple);
+  if (!vrais.length) return false;
+  const depuis = state.settings.derniereSauvegarde || vrais.map((d) => d.date).sort()[0];
+  return ageDays(depuis) > 30;
+}
+
 function App() {
   const s = useStore();
   const [tab, setTab] = useState('devis');
@@ -599,21 +644,22 @@ function App() {
   const [doc, setDoc] = useState(null); // { id, kind: 'client' | 'courses' }
 
   useEffect(() => { window.scrollTo(0, 0); }, [tab, devisId, doc && doc.kind]);
+  const go = (t) => { if (devisId) retirerSiVide(devisId); setDoc(null); setDevisId(null); setTab(t); };
 
   if (doc) {
     const d = s.devis.find((x) => x.id === doc.id);
     if (d) return html`<div class="shell">${doc.kind === 'courses'
       ? html`<${Courses} d=${d} onBack=${() => setDoc(null)} />`
-      : html`<${DocClient} d=${d} onBack=${() => setDoc(null)} />`}</div><${Toast} />`;
+      : html`<${DocClient} d=${d} onBack=${() => setDoc(null)} go=${go} />`}</div><${Toast} />`;
   }
 
-  const tabs = [['devis', 'Devis'], ['produits', 'Produits'], ['ouvrages', 'Ouvrages'], ['bilan', 'Bilan'], ['reglages', 'Réglages']];
+  const tabs = [['devis', 'Devis'], ['produits', 'Produits'], ['ouvrages', 'Travaux'], ['bilan', 'Bilan'], ['reglages', 'Réglages']];
   let view;
   if (tab === 'devis') {
     const d = devisId && s.devis.find((x) => x.id === devisId);
     view = d
-      ? html`<${DevisEdit} d=${d} onBack=${() => setDevisId(null)} onDoc=${(kind) => setDoc({ id: d.id, kind })} onOpen=${setDevisId} />`
-      : html`<${DevisList} onOpen=${setDevisId} />`;
+      ? html`<${DevisEdit} d=${d} onBack=${() => { retirerSiVide(d.id); setDevisId(null); }} onDoc=${(kind) => setDoc({ id: d.id, kind })} onOpen=${setDevisId} />`
+      : html`<${DevisList} onOpen=${setDevisId} go=${go} />`;
   } else if (tab === 'produits') view = html`<${Produits} />`;
   else if (tab === 'ouvrages') view = html`<${Ouvrages} />`;
   else if (tab === 'bilan') view = html`<${Bilan} onOpen=${(id) => { setTab('devis'); setDevisId(id); }} />`;
@@ -622,10 +668,10 @@ function App() {
   return html`
     <div class="shell">
       <header class="topbar">
-        <div class="brand"><${Logo} /><div><div class="brand-name">Métré & Devis</div><div class="brand-sub">${s.settings.entreprise.nom || 'Peinture & décoration'}</div></div></div>
+        <div class="brand"><${Logo} /><div><div class="brand-name">Métré & Devis</div><div class="brand-sub">${s.settings.entreprise.nom || 'Mon entreprise'}</div></div></div>
         <nav class="tabs" aria-label="Sections">
           ${tabs.map(([k, l]) => html`<button type="button" class=${tab === k ? 'on' : ''} aria-current=${tab === k ? 'page' : null}
-            onClick=${() => { setTab(k); if (k === 'devis') setDevisId(null); }}>${Icon[k]}<span>${l}</span></button>`)}
+            onClick=${() => go(k)}>${Icon[k]}<span>${l}</span></button>`)}
         </nav>
       </header>
       ${donneesCorrompues ? html`<div class="banner warn"><span>Les données enregistrées sur cet appareil étaient illisibles. Elles ont été mises de côté (rien n'est effacé) et l'appli a redémarré avec les exemples. Restaurez votre dernière sauvegarde dans Réglages.</span>
@@ -635,10 +681,56 @@ function App() {
     </div>
     <${Toast} />`;
 }
-function Toast() { return toastMsg ? html`<div class="toast" role="status">${toastMsg}</div>` : null; }
+function Toast() {
+  if (!toastMsg) return null;
+  return html`<div class="toast" role="status"><span>${toastMsg}</span>${toastAction ? html`<button type="button" class="toast-btn" onClick=${() => { const a = toastAction; toastMsg = ''; toastAction = null; a.fn(); listeners.forEach((l) => l()); }}>${toastAction.label}</button>` : null}</div>`;
+}
+
+/* ---------------------------------------------------------- Premiers pas */
+function Accueil({ onNouveau, go }) {
+  const st = state.settings;
+  const e = st.entreprise;
+  const set = (fn) => update(() => fn(st));
+  const ok1 = !!(e.nom && e.tel);
+  return html`<div class="card welcome">
+    <h2>Bienvenue ! On démarre en 3 étapes</h2>
+    <div class="steps">
+      <div class=${'step' + (ok1 ? ' done' : '')}>
+        <span class="step-n">1</span>
+        <div class="grow stack">
+          <b>Mon entreprise</b>
+          <span class="muted">Nom, adresse, SIRET, assurance : ils apparaissent sur vos devis.</span>
+          <div><button type="button" class="btn" onClick=${() => go('reglages')}>${ok1 ? 'Modifier' : 'Remplir'}</button></div>
+        </div>
+      </div>
+      <div class="step">
+        <span class="step-n">2</span>
+        <div class="grow stack">
+          <b>Mon prix de l'heure</b>
+          <div class="fields">
+            <${Field} label="Prix de l'heure pour le client"><${NumIn} id="w-th" value=${st.tauxHoraire} suffix="€/h" onSet=${(v) => set((st) => { st.tauxHoraire = v; })} /><//>
+            <${Field} label="Ce que vous coûte une heure" hint="Charges, camion, assurance, votre salaire"><${NumIn} id="w-ch" value=${st.coutHoraire} suffix="€/h" onSet=${(v) => set((st) => { st.coutHoraire = v; })} /><//>
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <span class="step-n">3</span>
+        <div class="grow stack">
+          <b>Mon premier devis</b>
+          <span class="muted">Vos prix de produits sont des exemples pour l'instant : corrigez-les dans « Produits » quand vous avez le temps.</span>
+          <div><button type="button" class="btn primary big" onClick=${() => { set((st) => { st.demarre = true; }); onNouveau(); }}>Faire mon premier devis</button></div>
+        </div>
+      </div>
+    </div>
+    <div class="row"><button type="button" class="btn ghost" onClick=${() => set((st) => { st.demarre = true; })}>Regarder d'abord les exemples</button></div>
+  </div>`;
+}
 
 /* ---------------------------------------------------------- Liste des devis */
-function DevisList({ onOpen }) {
+function aCompleter(d) {
+  return d.statut === 'accepte' && !(d.rex && (hasVal(d.rex.heures) || hasVal(d.rex.coutFournitures))) && ageDays(d.signe?.date || d.date) > 30;
+}
+function DevisList({ onOpen, go }) {
   const s = state;
   const [filtre, setFiltre] = useState('tous');
   const [q, setQ] = useState('');
@@ -648,32 +740,36 @@ function DevisList({ onOpen }) {
     .slice().sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.numero.localeCompare(a.numero));
   const counts = Object.fromEntries(Object.keys(STATUTS).map((k) => [k, s.devis.filter((d) => d.statut === k).length]));
   const nouveau = () => { let id; update((st) => { const d = nouveauDevis(st); st.devis.push(d); id = d.id; }); onOpen(id); };
-  const backupOld = ageDays(s.settings.derniereSauvegarde) > 30 && s.devis.some((d) => !d.exemple);
+  const exemples = s.devis.some((d) => d.exemple);
+
+  if (!s.settings.demarre) return html`<section class="section"><h1>Devis</h1><${Accueil} onNouveau=${nouveau} go=${go} /></section>`;
 
   return html`<section class="section">
     <div class="section-head">
       <h1>Devis</h1>
-      <button type="button" class="btn primary" onClick=${nouveau}>${Icon.plus} Nouveau devis</button>
+      <button type="button" class="btn primary big" onClick=${nouveau}>${Icon.plus} Nouveau devis</button>
     </div>
-    ${s.devis.some((d) => d.exemple) ? html`<div class="banner info"><span>Les devis marqués « exemple » servent à découvrir l'appli et le bilan. Vous pourrez les effacer dans Réglages.</span></div>` : null}
-    ${backupOld ? html`<div class="banner warn"><span>Pas de sauvegarde depuis plus d'un mois. Pensez à en faire une dans Réglages.</span></div>` : null}
-    <div class="row">
-      <div class="grow" style="flex-basis:220px"><input id="q-devis" type="text" placeholder="Rechercher un client, un n°…" value=${q} onInput=${(e) => setQ(e.target.value)} /></div>
+    ${exemples ? html`<div class="banner info"><span>Les devis marqués « exemple » servent seulement à découvrir l'appli.</span>
+      <${ConfirmBtn} cls="sm plain" label="Supprimer les exemples" onConfirm=${() => { effacerExemples(); toast('Exemples supprimés'); }} /></div>` : null}
+    ${sauvegardeEnRetard() ? html`<div class="banner warn"><span>Pensez à mettre vos devis à l'abri (sauvegarde).</span>
+      <button type="button" class="btn sm" onClick=${sauvegarder}>Sauvegarder maintenant</button></div>` : null}
+    ${s.devis.length > 4 ? html`<div class="row">
+      <div class="grow" style="flex-basis:220px"><input id="q-devis" type="search" placeholder="Rechercher un client…" value=${q} onInput=${(e) => setQ(e.target.value)} /></div>
       <div class="chips">
         <button type="button" class=${'chip' + (filtre === 'tous' ? ' on' : '')} onClick=${() => setFiltre('tous')}>Tous ${s.devis.length}</button>
         ${Object.entries(STATUTS).map(([k, l]) => html`<button type="button" class=${'chip' + (filtre === k ? ' on' : '')} onClick=${() => setFiltre(k)}>${l} ${counts[k]}</button>`)}
       </div>
-    </div>
+    </div>` : null}
     ${list.length === 0
-      ? html`<div class="card empty"><p>${s.devis.length ? 'Aucun devis ne correspond.' : 'Aucun devis pour le moment.'}</p><button type="button" class="btn primary" onClick=${nouveau}>Créer le premier devis</button></div>`
+      ? html`<div class="card empty"><p>${s.devis.length ? 'Aucun devis ne correspond.' : 'Aucun devis pour le moment.'}</p><button type="button" class="btn primary big" onClick=${nouveau}>Faire un devis</button></div>`
       : html`<div class="dlist">${list.map((d) => {
         const c = calcDevis(d);
         const p = d.statut === 'accepte' ? c.margeSigneePct : c.margePct;
         return html`<button type="button" class="ditem" key=${d.id} onClick=${() => onOpen(d.id)}>
-          <div class="who">${d.client.nom || 'Client sans nom'}</div>
-          <div class="amt">${eur0(d.statut === 'accepte' ? c.signe : c.totalHT)}</div>
-          <div class="meta"><${Pill} statut=${d.statut} /><span>${d.numero}</span><span>${dateFr(d.date)}</span><span>${d.objet}</span></div>
-          <div class="mg">marge <b class=${margeClass(p, num(d.params.margeMini))}>${pct(p, 0)}</b></div>
+          <div class="who">${d.client.nom || 'Client sans nom'}${d.exemple ? html` <span class="tag-ex">exemple</span>` : null}</div>
+          <div class="amt">${eur0(d.statut === 'accepte' ? c.signe : c.totalHT)}<span class="small muted"> HT</span></div>
+          <div class="meta"><${Pill} statut=${d.statut} />${aCompleter(d) ? html`<span class="pill st-todo">Chantier à compléter</span>` : null}<span>${dateFr(d.date)}</span><span>${d.objet}</span></div>
+          <div class="mg">bénéfice <b class=${margeClass(p, num(d.params.margeMini))}>${pct(p, 0)}</b></div>
         </button>`;
       })}</div>`}
   </section>`;
@@ -681,10 +777,11 @@ function DevisList({ onOpen }) {
 
 /* ---------------------------------------------------------- Édition d'un devis */
 function DevisEdit({ d, onBack, onDoc, onOpen }) {
-  const s = state;
   const c = calcDevis(d);
   const [detail, setDetail] = useState(false);
+  const [plusClient, setPlusClient] = useState(false);
   const [showParams, setShowParams] = useState(false);
+  const [finChantier, setFinChantier] = useState(!!(d.rex && (hasVal(d.rex.heures) || hasVal(d.rex.coutFournitures))));
   const set = (fn) => update(() => fn(d));
   const nbModifs = d.statut === 'brouillon' ? produitsModifies(d) : 0;
   const mini = num(d.params.margeMini);
@@ -702,7 +799,7 @@ function DevisEdit({ d, onBack, onDoc, onOpen }) {
       n.pieces.forEach((p) => { p.id = uid(); p.lignes.forEach((l) => { l.id = uid(); }); });
       st.devis.push(n); id = n.id;
     });
-    toast('Devis dupliqué');
+    toast('Devis copié : vous êtes sur la copie');
     onOpen(id);
   };
   const prixCible = (v) => {
@@ -710,115 +807,115 @@ function DevisEdit({ d, onBack, onDoc, onOpen }) {
     if (v > c.sousTotal) { toast('Ce prix est au-dessus du prix calculé : pas de remise à appliquer.'); return; }
     set((d) => { d.remisePct = Math.round(Math.max(0, (1 - v / c.sousTotal) * 100) * 1e4) / 1e4; });
   };
+  const rp = c.remisePossible;
 
   return html`<section class="section">
     <div class="row between">
-      <button type="button" class="btn ghost" onClick=${onBack}>${Icon.back} Tous les devis</button>
-      <div class="row">
-        <button type="button" class="btn" onClick=${() => onDoc('courses')}>Liste de courses</button>
-        <button type="button" class="btn primary" onClick=${() => onDoc('client')}>Devis client</button>
-      </div>
+      <button type="button" class="btn ghost" onClick=${onBack}>${Icon.back} Mes devis</button>
+      <span class="muted">${d.numero}${d.exemple ? html` · <span class="tag-ex">exemple</span>` : null}</span>
     </div>
-    <div class="row between">
-      <h1>${d.numero}</h1>
-      ${d.exemple ? html`<span class="tag-ex">Exemple</span>` : null}
-    </div>
+    <div class="status-bar" role="group" aria-label="Où en est ce devis">${Object.entries(STATUTS).map(([k, l]) => html`<button type="button" class=${'st-' + k + (d.statut === k ? ' on' : '')} aria-pressed=${d.statut === k} onClick=${() => setStatut(k)}>${l}</button>`)}</div>
 
-    ${nbModifs ? html`<div class="banner warn"><span>Le prix de ${nbModifs} produit${nbModifs > 1 ? 's a' : ' a'} changé dans votre base depuis la création de ce devis.</span>
-      <button type="button" class="btn sm" onClick=${() => { set(actualiserPrix); toast('Prix mis à jour'); }}>Mettre à jour les prix</button></div>` : null}
+    ${nbModifs ? html`<div class="banner warn"><span>Le prix de ${nbModifs} produit${nbModifs > 1 ? 's a' : ' a'} changé depuis que ce devis a été commencé.</span>
+      <button type="button" class="btn sm" onClick=${() => { set(actualiserPrix); toast('Prix mis à jour'); }}>Prendre les nouveaux prix</button></div>` : null}
+
+    ${d.statut === 'accepte' ? html`<div class="card signe">
+      <span class="tape">Devis signé</span>
+      <div class="fields">
+        <${Field} label="Prix signé HT" hint=${c.negociation > 0.0005 ? 'Soit ' + pct(c.negociation) + ' de moins que le prix de départ' : 'Le prix du devis. Changez-le si vous avez négocié.'}><${NumIn} id="sg-prix" value=${d.signe?.prixHT} suffix="€" onSet=${(v) => set((d) => { d.signe = { ...(d.signe || {}), prixHT: v }; })} /><//>
+        <${Field} label="Signé le"><input id="sg-date" type="date" value=${d.signe?.date || ''} onInput=${(e) => set((d) => { d.signe = { ...(d.signe || {}), date: e.target.value }; })} /><//>
+      </div>
+      ${!finChantier ? html`<div><button type="button" class="btn" onClick=${() => setFinChantier(true)}>Chantier terminé ? Notez le temps passé</button></div>` : html`
+        <p><b>Chantier terminé</b> <span class="muted">— pour savoir ce que vous avez vraiment gagné</span></p>
+        <div class="fields">
+          <${Field} label="Heures passées en vrai" hint=${'Prévu : ' + fmt(c.heures, 1) + ' h'}><${NumIn} id="rx-h" value=${d.rex?.heures} suffix="h" onSet=${(v) => set((d) => { d.rex = { ...(d.rex || {}), heures: v }; })} /><//>
+          <${Field} label="Produits achetés en vrai (HT)" hint=${'Prévu : ' + eur0(c.coutFourn) + '. Laissez vide si pareil.'}><${NumIn} id="rx-f" value=${d.rex?.coutFournitures} suffix="€" onSet=${(v) => set((d) => { d.rex = { ...(d.rex || {}), coutFournitures: v }; })} /><//>
+        </div>
+        ${c.rexSaisi ? html`<p class="big-line">Bénéfice réel : <b class=${margeClass(c.margeReellePct, mini)}>${eur0(c.margeReelle)} (${pct(c.margeReellePct, 0)})</b> <span class="muted">au lieu de ${pct(c.margeSigneePct, 0)} prévu</span></p>` : null}`}
+    </div>` : null}
 
     <div class="card">
-      <span class="tape">Client & chantier</span>
+      <span class="tape">Client</span>
       <div class="fields">
-        <${Field} label="Client"><${TextIn} id="cl-nom" value=${d.client.nom} placeholder="Nom du client" onSet=${(v) => set((d) => { d.client.nom = v; })} /><//>
+        <${Field} label="Nom du client"><${TextIn} id="cl-nom" value=${d.client.nom} placeholder="Ex. Mme Martin" onSet=${(v) => set((d) => { d.client.nom = v; })} /><//>
         <${Field} label="Téléphone"><${TextIn} id="cl-tel" type="tel" value=${d.client.tel} onSet=${(v) => set((d) => { d.client.tel = v; })} /><//>
-        <${Field} label="E-mail"><${TextIn} id="cl-mail" type="email" value=${d.client.email} onSet=${(v) => set((d) => { d.client.email = v; })} /><//>
-        <${Field} label="Date du devis"><input id="cl-date" type="date" value=${d.date} onInput=${(e) => set((d) => { d.date = e.target.value; })} /><//>
-        <${Field} label="Adresse du client" wide><${TextIn} id="cl-adr" value=${d.client.adresse} onSet=${(v) => set((d) => { d.client.adresse = v; })} /><//>
-        <${Field} label="Adresse du chantier" hint="Si différente" wide><${TextIn} id="cl-ch" value=${d.chantier} onSet=${(v) => set((d) => { d.chantier = v; })} /><//>
-        <${Field} label="Objet" wide><${TextIn} id="cl-obj" value=${d.objet} onSet=${(v) => set((d) => { d.objet = v; })} /><//>
+        <${Field} label="Adresse" wide><${TextIn} id="cl-adr" value=${d.client.adresse} onSet=${(v) => set((d) => { d.client.adresse = v; })} /><//>
+        ${plusClient ? html`
+          <${Field} label="E-mail"><${TextIn} id="cl-mail" type="email" value=${d.client.email} onSet=${(v) => set((d) => { d.client.email = v; })} /><//>
+          <${Field} label="Date du devis"><input id="cl-date" type="date" value=${d.date} onInput=${(e) => set((d) => { d.date = e.target.value; })} /><//>
+          <${Field} label="Adresse du chantier" hint="Si ce n'est pas chez le client" wide><${TextIn} id="cl-ch" value=${d.chantier} onSet=${(v) => set((d) => { d.chantier = v; })} /><//>
+          <${Field} label="Titre du devis" wide><${TextIn} id="cl-obj" value=${d.objet} onSet=${(v) => set((d) => { d.objet = v; })} /><//>` : null}
       </div>
+      ${!plusClient ? html`<div><button type="button" class="btn ghost" onClick=${() => setPlusClient(true)}>+ E-mail, date, adresse du chantier…</button></div>` : null}
     </div>
 
     <datalist id="pieces-courantes">${PIECES_COURANTES.map((n) => html`<option value=${n}></option>`)}</datalist>
-    <div class="section-head"><span class="tape">Métré par pièce</span><span class="muted small">Dimensions en mètres</span></div>
+    <div class="section-head"><span class="tape">Les pièces</span><span class="muted">Mesures en mètres</span></div>
     ${d.pieces.map((p, i) => html`<${PieceCard} key=${p.id} d=${d} p=${p} i=${i} calc=${c.pieces[i]} />`)}
     <div class="row">
-      <button type="button" class="btn" onClick=${() => set((d) => { d.pieces.push(nouvellePiece('Pièce ' + (d.pieces.length + 1))); })}>${Icon.plus} Ajouter une pièce</button>
+      <button type="button" class="btn big" onClick=${() => set((d) => { d.pieces.push(nouvellePiece('')); })}>${Icon.plus} Ajouter une pièce</button>
     </div>
 
-    <div class="card">
-      <div class="row between"><span class="tape">Divers</span><span class="muted small">Déplacement, évacuation, location…</span></div>
-      ${d.divers.length ? html`<div class="stack">${d.divers.map((x) => html`<div class="frow" key=${x.id}>
-        <${Field} label="Désignation"><${TextIn} id=${'dv-n-' + x.id} value=${x.designation} onSet=${(v) => set(() => { x.designation = v; })} /><//>
+    ${d.divers.length || expert() ? html`<div class="card">
+      <div class="row between"><span class="tape">Lignes libres</span><span class="muted small">Déplacement, évacuation, location…</span></div>
+      ${d.divers.map((x) => html`<div class="frow" key=${x.id}>
+        <${Field} label="Ce que c'est"><${TextIn} id=${'dv-n-' + x.id} value=${x.designation} placeholder="Ex. Évacuation des déchets" onSet=${(v) => set(() => { x.designation = v; })} /><//>
         <${Field} label="Prix HT"><${NumIn} id=${'dv-v-' + x.id} value=${x.vente} onSet=${(v) => set(() => { x.vente = v; })} /><//>
         <${Field} label="Vous coûte"><${NumIn} id=${'dv-c-' + x.id} value=${x.cout} onSet=${(v) => set(() => { x.cout = v; })} /><//>
-        <button type="button" class="x" aria-label="Supprimer" onClick=${() => set((d) => { d.divers = d.divers.filter((y) => y !== x); })}>×</button>
-      </div>`)}</div>` : null}
-      <div><button type="button" class="btn sm" onClick=${() => set((d) => { d.divers.push({ id: uid(), designation: '', vente: null, cout: null }); })}>${Icon.plus} Ligne divers</button></div>
-    </div>
+        <button type="button" class="x" aria-label="Supprimer la ligne" onClick=${() => set((d) => { d.divers = d.divers.filter((y) => y !== x); })}>×</button>
+      </div>`)}
+      <div><button type="button" class="btn" onClick=${() => set((d) => { d.divers.push({ id: uid(), designation: '', vente: null, cout: null }); })}>${Icon.plus} Ligne libre</button></div>
+    </div>` : html`<div><button type="button" class="btn ghost" onClick=${() => set((d) => { d.divers.push({ id: uid(), designation: '', vente: null, cout: null }); })}>+ Ajouter une ligne libre (déplacement, évacuation…)</button></div>`}
 
     <div class="card">
-      <div class="row between"><span class="tape">Prix & remise</span>
-        <button type="button" class="btn ghost sm" onClick=${() => setShowParams(!showParams)}>${showParams ? 'Masquer les tarifs' : 'Tarifs de ce devis'}</button></div>
+      <span class="tape">Remise</span>
+      <div class="chips">${[0, 5, 10, 15].map((r) => html`<button type="button" class=${'chip big' + (num(d.remisePct) === r ? ' on' : '')} onClick=${() => set((d) => { d.remisePct = r; })}>${r ? '− ' + r + ' %' : 'Aucune'}</button>`)}</div>
       <div class="fields">
-        <${Field} label="Remise %"><${NumIn} id="rm-pct" value=${d.remisePct} onSet=${(v) => set((d) => { d.remisePct = v ?? 0; })} /><//>
-        <${Field} label="Ou prix cible HT" hint="Calcule la remise"><${NumIn} id="rm-cible" placeholder=${fmt(c.totalHT, 0)} onCommit=${prixCible} /><//>
+        <${Field} label="Autre remise"><${NumIn} id="rm-pct" value=${d.remisePct} suffix="%" onSet=${(v) => set((d) => { d.remisePct = v ?? 0; })} /><//>
+        <${Field} label="Ou le prix que veut le client (HT)" hint="La remise se calcule toute seule"><${NumIn} id="rm-cible" placeholder=${fmt(c.totalHT, 0)} suffix="€" onCommit=${prixCible} /><//>
       </div>
-      ${showParams ? html`<div class="fields">
-        <${Field} label="Taux horaire facturé"><${NumIn} id="pa-th" value=${d.params.tauxHoraire} suffix="€/h" onSet=${(v) => set((d) => { d.params.tauxHoraire = v; })} /><//>
-        <${Field} label="Coût réel de l'heure"><${NumIn} id="pa-ch" value=${d.params.coutHoraire} suffix="€/h" onSet=${(v) => set((d) => { d.params.coutHoraire = v; })} /><//>
-        <${Field} label="Coef. fournitures"><${NumIn} id="pa-cf" value=${d.params.coefFournitures} suffix="×" onSet=${(v) => set((d) => { d.params.coefFournitures = v; })} /><//>
-        <${Field} label="Pertes"><${NumIn} id="pa-pe" value=${round2(num(d.params.pertes) * 100)} suffix="%" onSet=${(v) => set((d) => { d.params.pertes = num(v) / 100; })} /><//>
+      <p class=${c.totalHT >= c.plancher ? 'mg-ok' : 'mg-bad'}><b>${c.totalHT >= c.plancher ? 'Remise possible jusqu\'à ' + pct(Math.max(0, rp), 0) + ' du prix de départ.' : 'Attention : ce prix est sous votre prix mini.'}</b> Prix mini : ${eur0(c.plancher)} HT.</p>
+      ${expert() ? html`<div><button type="button" class="btn ghost sm" onClick=${() => setShowParams(!showParams)}>${showParams ? 'Masquer les tarifs de ce devis' : 'Tarifs de ce devis'}</button></div>` : null}
+      ${showParams && expert() ? html`<div class="fields">
+        <${Field} label="Prix de l'heure"><${NumIn} id="pa-th" value=${d.params.tauxHoraire} suffix="€/h" onSet=${(v) => set((d) => { d.params.tauxHoraire = v; })} /><//>
+        <${Field} label="Coût de l'heure"><${NumIn} id="pa-ch" value=${d.params.coutHoraire} suffix="€/h" onSet=${(v) => set((d) => { d.params.coutHoraire = v; })} /><//>
+        <${Field} label="Marge sur produits"><${NumIn} id="pa-cf" value=${round2((num(d.params.coefFournitures) - 1) * 100)} suffix="%" onSet=${(v) => set((d) => { d.params.coefFournitures = 1 + num(v) / 100; })} /><//>
+        <${Field} label="Perte de produit"><${NumIn} id="pa-pe" value=${round2(num(d.params.pertes) * 100)} suffix="%" onSet=${(v) => set((d) => { d.params.pertes = num(v) / 100; })} /><//>
         <${Field} label="TVA"><${NumIn} id="pa-tva" value=${d.params.tva} suffix="%" onSet=${(v) => set((d) => { d.params.tva = v; })} /><//>
-        <${Field} label="Marge mini"><${NumIn} id="pa-mm" value=${round2(num(d.params.margeMini) * 100)} suffix="%" onSet=${(v) => set((d) => { d.params.margeMini = num(v) / 100; })} /><//>
-      </div><p class="hint">Ces tarifs sont propres à ce devis. Les valeurs par défaut se règlent dans Réglages.</p>` : null}
+        <${Field} label="Bénéfice minimum"><${NumIn} id="pa-mm" value=${round2(num(d.params.margeMini) * 100)} suffix="%" onSet=${(v) => set((d) => { d.params.margeMini = num(v) / 100; })} /><//>
+      </div>` : null}
     </div>
 
     <div class="card">
-      <span class="tape">Suivi</span>
-      <div class="status-bar">${Object.entries(STATUTS).map(([k, l]) => html`<button type="button" class=${'st-' + k + (d.statut === k ? ' on' : '')} onClick=${() => setStatut(k)}>${l}</button>`)}</div>
-      ${d.statut === 'accepte' ? html`
-        <div class="fields">
-          <${Field} label="Signé le"><input id="sg-date" type="date" value=${d.signe?.date || ''} onInput=${(e) => set((d) => { d.signe = { ...(d.signe || {}), date: e.target.value }; })} /><//>
-          <${Field} label="Prix signé HT" hint=${c.negociation > 0.0005 ? 'Soit ' + pct(c.negociation) + ' de moins que le prix de départ' : 'Prix du devis'}><${NumIn} id="sg-prix" value=${d.signe?.prixHT} onSet=${(v) => set((d) => { d.signe = { ...(d.signe || {}), prixHT: v }; })} /><//>
-        </div>
-        <p class="lab">Retour de chantier (une fois terminé)</p>
-        <div class="fields">
-          <${Field} label="Heures réellement passées" hint=${'Prévu : ' + fmt(c.heures, 1) + ' h'}><${NumIn} id="rx-h" value=${d.rex?.heures} onSet=${(v) => set((d) => { d.rex = { ...(d.rex || {}), heures: v }; })} /><//>
-          <${Field} label="Fournitures réellement achetées HT" hint=${'Prévu : ' + eur0(c.coutFourn)}><${NumIn} id="rx-f" value=${d.rex?.coutFournitures} onSet=${(v) => set((d) => { d.rex = { ...(d.rex || {}), coutFournitures: v }; })} /><//>
-        </div>
-        ${c.rexSaisi ? html`<p>Marge réelle : <b class=${margeClass(c.margeReellePct, mini)}>${eur0(c.margeReelle)} (${pct(c.margeReellePct)})</b> contre ${pct(c.margeSigneePct)} prévue.</p>` : null}
-      ` : null}
-      <${Field} label="Notes (internes, pas sur le devis)"><textarea id="dv-notes" value=${d.notes || ''} onInput=${(e) => set((d) => { d.notes = e.target.value; })}></textarea><//>
-    </div>
-
-    <div class="row">
-      <button type="button" class="btn" onClick=${dupliquer}>Dupliquer ce devis</button>
-      <${ConfirmBtn} label="Supprimer ce devis" confirm="Supprimer définitivement ?" onConfirm=${() => { onBack(); update((st) => { st.devis = st.devis.filter((x) => x.id !== d.id); }); toast('Devis supprimé'); }} />
+      <span class="tape">C'est prêt ?</span>
+      <button type="button" class="btn primary big" onClick=${() => onDoc('client')}>Voir le devis à envoyer (PDF)</button>
+      <button type="button" class="btn big" onClick=${() => onDoc('courses')}>Liste de courses (pots à acheter)</button>
+      <${Field} label="Notes pour moi (pas sur le devis)"><textarea id="dv-notes" value=${d.notes || ''} onInput=${(e) => set((d) => { d.notes = e.target.value; })}></textarea><//>
+      <div class="row">
+        <button type="button" class="btn" onClick=${dupliquer}>Faire une copie</button>
+        <${ConfirmBtn} label="Supprimer ce devis" confirm="Supprimer pour de bon ?" onConfirm=${() => { onBack(); update((st) => { st.devis = st.devis.filter((x) => x.id !== d.id); }); toast('Devis supprimé'); }} />
+      </div>
     </div>
 
     <div class="summary" aria-live="polite">
       <div class="main">
-        <div><div class="tot">${eur(c.totalHT)} <span class="small" style="font-weight:500">HT</span></div><div class="ttc">${eur(c.ttc)} TTC · ${fmt(c.heures, 1)} h de travail</div></div>
-        <div class="mgbox"><div class="small" style="opacity:.75">marge nette</div><div class=${'mgv ' + (c.totalHT > 0 ? margeClass(c.margePct, mini) : '')}>${c.totalHT > 0 ? pct(c.margePct) : '–'}</div></div>
+        <div><div class="tot">${eur(c.totalHT)} <span class="small" style="font-weight:500">HT</span></div><div class="ttc">${eur(c.ttc)} TTC pour le client</div></div>
+        <div class="mgbox"><div class="small" style="opacity:.8">votre bénéfice</div><div class=${'mgv ' + (c.totalHT > 0 ? margeClass(c.margePct, mini) : '')}>${c.totalHT > 0 ? eur0(c.marge) + ' · ' + pct(c.margePct, 0) : '–'}</div></div>
       </div>
-      <button type="button" class="toggle" onClick=${() => setDetail(!detail)}>${detail ? 'Masquer le détail' : 'Voir coûts et marge de négociation'}</button>
+      ${c.totalHT > 0 ? html`<div class=${'sum-line ' + (c.totalHT >= c.plancher ? '' : 'mg-bad')}>${c.totalHT >= c.plancher
+        ? html`Remise possible jusqu'à <b>${pct(Math.max(0, rp), 0)}</b> · prix mini <b>${eur0(c.plancher)}</b> HT`
+        : html`Sous votre prix mini (${eur0(c.plancher)} HT)`}</div>` : null}
+      <button type="button" class="toggle" onClick=${() => setDetail(!detail)}>${detail ? 'Masquer le détail' : 'Voir le détail du prix'}</button>
       ${detail ? html`<dl>
-        <dt>Sous-total avant remise</dt><dd>${eur(c.sousTotal)}</dd>
-        ${c.remise ? html`<dt>Remise ${fmt(d.remisePct)} %</dt><dd>− ${eur(c.remise)}</dd>` : null}
+        <dt>Produits achetés</dt><dd>${eur(c.coutFourn)}</dd>
+        ${c.stock > 1 ? html`<dt class="sub-dt">dont produit qui vous restera</dt><dd class="sub-dt">${eur0(c.stock)}</dd>` : null}
+        <dt>Votre temps (${fmt(c.heures, 1)} h × ${eur0(num(d.params.coutHoraire))})</dt><dd>${eur(c.coutMO)}</dd>
+        ${c.diversCout ? html`<dt>Lignes libres (ce qu'elles vous coûtent)</dt><dd>${eur(c.diversCout)}</dd>` : null}
+        <dt>Total de ce que ça vous coûte</dt><dd>${eur(c.coutTotal)}</dd>
         <div class="sep"></div>
-        <dt>Fournitures (achat, pots entiers)</dt><dd>${eur(c.coutFourn)}</dd>
-        <dt>Main d'œuvre au coût (${fmt(c.heures, 1)} h × ${eur(num(d.params.coutHoraire))})</dt><dd>${eur(c.coutMO)}</dd>
-        ${c.diversCout ? html`<dt>Divers (coût)</dt><dd>${eur(c.diversCout)}</dd>` : null}
-        <dt>Coût de revient total</dt><dd>${eur(c.coutTotal)}</dd>
-        <div class="sep"></div>
-        <dt>Marge nette</dt><dd>${eur(c.marge)}</dd>
-        <dt>Gain de l'heure travaillée</dt><dd>${c.heures ? eur(c.margeBrute / c.heures) + '/h' : '–'}</dd>
-        <dt>Prix plancher (marge mini ${pct(mini, 0)})</dt><dd>${eur(c.plancher)}</dd>
-        <dt>Marge de négociation</dt><dd class=${c.nego < 0 ? 'mg-bad' : ''}>${c.nego >= 0 ? eur(c.nego) + ' (' + pct(c.totalHT ? c.nego / c.totalHT : 0, 0) + ')' : 'sous le plancher'}</dd>
-        ${ref ? html`<div class="sep"></div><dt>Marge moyenne de vos devis signés</dt><dd>${pct(ref.moy)}</dd>
-          <dt>Remise moyenne accordée</dt><dd>${pct(ref.nego)}</dd>` : null}
+        <dt>Bénéfice</dt><dd>${eur(c.marge)}</dd>
+        <dt>Prix mini (bénéfice ${pct(mini, 0)})</dt><dd>${eur(c.plancher)}</dd>
+        ${ref ? html`<div class="sep"></div><dt>Bénéfice moyen de vos devis signés</dt><dd>${pct(ref.moy, 0)}</dd>` : null}
       </dl>` : null}
     </div>
   </section>`;
@@ -830,75 +927,98 @@ function refAcceptes(exceptId) {
   return { moy: avg(acc.map((c) => c.margeSigneePct)), nego: avg(acc.map((c) => c.negociation)), n: acc.length };
 }
 
+// Travaux les plus utilisés dans les devis (pour les boutons rapides)
+function travauxFrequents() {
+  const n = new Map();
+  for (const d of state.devis) for (const p of d.pieces) for (const l of p.lignes) n.set(l.ouvrage.id, (n.get(l.ouvrage.id) || 0) + 1);
+  return state.ouvrages.slice().sort((a, b) => (n.get(b.id) || 0) - (n.get(a.id) || 0)).slice(0, 6);
+}
+
 function PieceCard({ d, p, i, calc }) {
   const set = (fn) => update(() => fn(p));
   const sf = calc.surf;
   const ouvrages = state.ouvrages.slice().sort((a, b) => a.nom.localeCompare(b.nom));
   const prev = i > 0 ? d.pieces[i - 1] : null;
   const total = sum(calc.lignes, (x) => x.c.vente);
+  const presents = new Set(p.lignes.map((l) => l.ouvrage.id));
+  const rapides = travauxFrequents().filter((o) => !presents.has(o.id)).slice(0, 4);
   const addOuv = (id) => { const o = ouvById(id); if (o) set((p) => { p.lignes.push(nouvelleLigne(o, state.produits)); }); };
+  const retirer = (l) => {
+    const idx = p.lignes.indexOf(l);
+    set((p) => { p.lignes = p.lignes.filter((y) => y !== l); });
+    toast('« ' + l.ouvrage.nom + ' » retiré', { label: 'Annuler', fn: () => update(() => { p.lignes.splice(idx, 0, l); }) });
+  };
+  const nomVide = !p.nom || /^Pièce \d+$/.test(p.nom);
+  const ouv = (k, m2, per) => set((p) => {
+    p[k] = Math.max(0, num(p[k]) + (m2 > 0 ? 1 : -1));
+    p.deduction = Math.max(0, round2(num(p.deduction) + m2)) || null;
+    p.dedPerimetre = Math.max(0, round2(num(p.dedPerimetre) + per)) || null;
+  });
 
   return html`<div class="card piece">
     <div class="piece-head">
       <div class="grow"><input id=${'pc-n-' + p.id} type="text" list="pieces-courantes" value=${p.nom} placeholder="Nom de la pièce" onInput=${(e) => set((p) => { p.nom = e.target.value; })} /></div>
-      <span class="num" style="font-weight:700">${eur0(total)}</span>
+      <span class="num piece-tot">${eur0(total)}</span>
     </div>
+    ${nomVide ? html`<div class="chips">${['Salon', 'Chambre', 'Cuisine', 'Salle de bain', 'Couloir', 'Entrée'].map((n) => html`<button type="button" class="chip" onClick=${() => set((p) => { p.nom = n; })}>${n}</button>`)}</div>` : null}
     <div class="fields tight">
       <${Field} label="Longueur"><${NumIn} id=${'pc-L-' + p.id} value=${p.L} placeholder="0" onSet=${(v) => set((p) => { p.L = v; })} /><//>
       <${Field} label="Largeur"><${NumIn} id=${'pc-l-' + p.id} value=${p.l} placeholder="0" onSet=${(v) => set((p) => { p.l = v; })} /><//>
       <${Field} label="Hauteur"><${NumIn} id=${'pc-H-' + p.id} value=${p.H} placeholder="2,5" onSet=${(v) => set((p) => { p.H = v; })} /><//>
-      <${Field} label="Ouvertures m²" hint="À déduire des murs"><${NumIn} id=${'pc-d-' + p.id} value=${p.deduction} placeholder="0" onSet=${(v) => set((p) => { p.deduction = v; })} /><//>
     </div>
-    <div class="chips">
-      <button type="button" class="chip" onClick=${() => set((p) => { p.deduction = round2(num(p.deduction) + 1.6); p.dedPerimetre = round2(num(p.dedPerimetre) + 0.8); })}>+ Porte (1,6 m²)</button>
-      <button type="button" class="chip" onClick=${() => set((p) => { p.deduction = round2(num(p.deduction) + 1.5); })}>+ Fenêtre (1,5 m²)</button>
-      <button type="button" class="chip" onClick=${() => set((p) => { p.deduction = round2(num(p.deduction) + 2.6); p.dedPerimetre = round2(num(p.dedPerimetre) + 1.2); })}>+ Porte-fenêtre (2,6 m²)</button>
-      ${num(p.deduction) || num(p.dedPerimetre) ? html`<button type="button" class="chip" onClick=${() => set((p) => { p.deduction = null; p.dedPerimetre = null; })}>Remettre à 0</button>` : null}
+    <div class="ouvertures">
+      <span class="lab">Portes et fenêtres (enlevées des murs)</span>
+      ${[['nbPortes', 'Portes', 1.6, 0.8], ['nbFenetres', 'Fenêtres', 1.5, 0], ['nbPF', 'Portes-fenêtres', 2.6, 1.2]].map(([k, l, m2, per]) => html`<div class="counter">
+        <span>${l}</span>
+        <button type="button" class="cbtn" aria-label=${'Une ' + l.toLowerCase().slice(0, -1) + ' de moins'} disabled=${!num(p[k])} onClick=${() => ouv(k, -m2, -per)}>−</button>
+        <b class="num">${num(p[k])}</b>
+        <button type="button" class="cbtn" aria-label=${'Une ' + l.toLowerCase().slice(0, -1) + ' de plus'} onClick=${() => ouv(k, m2, per)}>+</button>
+      </div>`)}
+      <${Field} label="Ou surface à enlever (m²)"><${NumIn} id=${'pc-d-' + p.id} value=${p.deduction} placeholder="0" onSet=${(v) => set((p) => { p.deduction = v; })} /><//>
     </div>
     <div class="surf">
-      <span>Murs <b>${fmt(sf.murs, 1)} m²</b></span><span>Plafond <b>${fmt(sf.plafond, 1)} m²</b></span><span>Sol <b>${fmt(sf.sol, 1)} m²</b></span><span>Périmètre <b>${fmt(sf.perimetre, 1)} ml</b></span>
+      <span>Murs <b>${fmt(sf.murs, 1)} m²</b></span><span>Plafond <b>${fmt(sf.plafond, 1)} m²</b></span><span>Sol <b>${fmt(sf.sol, 1)} m²</b></span><span>Tour de pièce <b>${fmt(sf.perimetre, 1)} m</b></span>
     </div>
     ${calc.lignes.length ? html`<div class="lignes">${calc.lignes.map(({ ligne: l, c }) => html`<div class="ligne" key=${l.id}>
-      <div class="nm">${l.ouvrage.nom}<div class="sub">${fmt(c.heures, 1)} h · ${eur(c.pu)} / ${c.unite}${hasVal(l.qte) && l.ouvrage.base !== 'unite' && l.ouvrage.base !== 'forfait' ? ' · quantité saisie' : ''}</div></div>
-      <${NumIn} id=${'lg-q-' + l.id} value=${l.qte} placeholder=${fmt(c.auto, 2)} onSet=${(v) => update(() => { l.qte = v; })} />
+      <div class="nm">${l.ouvrage.nom}<div class="sub">${eur(c.pu)} / ${c.unite}${hasVal(l.qte) && l.ouvrage.base !== 'unite' && l.ouvrage.base !== 'forfait' ? html` · <button type="button" class="linkbtn" onClick=${() => update(() => { l.qte = null; })}>remettre le calcul auto</button>` : (l.ouvrage.base === 'unite' || l.ouvrage.base === 'forfait' ? '' : ' · calcul auto')}</div></div>
+      <${NumIn} id=${'lg-q-' + l.id} value=${hasVal(l.qte) ? l.qte : c.auto} onSet=${(v) => update(() => { l.qte = v; })} />
       <span class="u">${c.unite}</span>
       <span class="px">${eur(c.vente)}</span>
-      <button type="button" class="x" aria-label=${'Retirer ' + l.ouvrage.nom} onClick=${() => set((p) => { p.lignes = p.lignes.filter((y) => y !== l); })}>×</button>
-    </div>`)}</div>` : html`<p class="muted small">Ajoutez les travaux à faire dans cette pièce.</p>`}
-    <div class="row">
-      <div class="grow" style="flex-basis:220px">
-        <select id=${'pc-add-' + p.id} aria-label="Ajouter un ouvrage" onChange=${(e) => { addOuv(e.target.value); e.target.value = ''; }}>
-          <option value="">+ Ajouter un ouvrage…</option>
-          ${ouvrages.map((o) => html`<option value=${o.id}>${o.nom}</option>`)}
-        </select>
-      </div>
-      ${prev && prev.lignes.length && !p.lignes.length ? html`<button type="button" class="btn sm" onClick=${() => set((p) => { p.lignes = prev.lignes.map((l) => ({ ...JSON.parse(JSON.stringify(l)), id: uid(), qte: l.ouvrage.base === 'unite' || l.ouvrage.base === 'forfait' ? l.qte : null })); })}>Mêmes travaux que « ${prev.nom} »</button>` : null}
-    </div>
+      <button type="button" class="x" aria-label=${'Retirer ' + l.ouvrage.nom} onClick=${() => retirer(l)}>×</button>
+    </div>`)}</div>` : html`<p class="muted">Quels travaux dans cette pièce ? Touchez-les ci-dessous.</p>`}
+    ${prev && prev.lignes.length && !p.lignes.length ? html`<button type="button" class="btn primary" onClick=${() => set((p) => { p.lignes = prev.lignes.map((l) => ({ ...JSON.parse(JSON.stringify(l)), id: uid(), qte: l.ouvrage.base === 'unite' || l.ouvrage.base === 'forfait' ? l.qte : null })); })}>Mêmes travaux que « ${prev.nom || 'la pièce d\'avant'} »</button>` : null}
+    ${rapides.length ? html`<div class="chips">${rapides.map((o) => html`<button type="button" class="chip add" onClick=${() => addOuv(o.id)}>+ ${o.nom}</button>`)}</div>` : null}
+    <select id=${'pc-add-' + p.id} aria-label="Ajouter un autre travail" onChange=${(e) => { addOuv(e.target.value); e.target.value = ''; }}>
+      <option value="">+ Autre travail…</option>
+      ${ouvrages.map((o) => html`<option value=${o.id}>${o.nom}</option>`)}
+    </select>
     <div class="row">
       <button type="button" class="btn ghost sm" onClick=${() => update(() => {
-        const n = JSON.parse(JSON.stringify(p)); n.id = uid(); n.nom = p.nom + ' (copie)'; n.lignes.forEach((l) => { l.id = uid(); });
+        const n = JSON.parse(JSON.stringify(p)); n.id = uid(); n.nom = p.nom ? p.nom + ' (copie)' : ''; n.lignes.forEach((l) => { l.id = uid(); });
         d.pieces.splice(i + 1, 0, n);
-      })}>Dupliquer la pièce</button>
+      })}>Copier la pièce</button>
       <${ConfirmBtn} cls="sm ghost" label="Supprimer la pièce" onConfirm=${() => update(() => { d.pieces = d.pieces.filter((x) => x !== p); })} />
     </div>
   </div>`;
 }
 
 /* ---------------------------------------------------------- Document client */
-function DocClient({ d, onBack }) {
+function DocClient({ d, onBack, go }) {
   const c = calcDevis(d);
   const e = state.settings.entreprise;
   const s = state.settings;
+  const manque = [!e.nom && 'le nom de votre entreprise', !e.adresse && 'votre adresse', !e.siret && 'votre SIRET', !e.assurance && 'votre assurance décennale'].filter(Boolean);
   return html`<div class="section">
     <div class="doc-bar no-print">
       <button type="button" class="btn ghost" onClick=${onBack}>${Icon.back} Retour au devis</button>
-      <button type="button" class="btn primary" onClick=${() => { try { window.print(); } catch (err) {} }}>Imprimer / PDF</button>
+      <button type="button" class="btn primary big" onClick=${() => { try { window.print(); } catch (err) {} }}>Enregistrer en PDF</button>
     </div>
-    <p class="hint no-print">Sur téléphone : « Imprimer » puis « Enregistrer en PDF » pour l'envoyer au client.</p>
+    ${manque.length ? html`<div class="banner warn no-print"><span>Il manque sur ce devis : ${manque.join(', ')}.</span><button type="button" class="btn sm" onClick=${() => go('reglages')}>Compléter maintenant</button></div>` : null}
+    <div class="banner info no-print"><span>Touchez « Enregistrer en PDF », puis choisissez <b>Enregistrer en PDF</b> (ou « Imprimer » → « Partager » sur iPhone) pour l'envoyer au client.</span></div>
     <article class="doc">
       <div class="dh">
         <div class="ent">
-          <b>${e.nom}</b><br />
+          <b>${e.nom || 'Votre entreprise'}</b><br />
           ${e.adresse ? html`${e.adresse}<br />` : null}${e.cp || e.ville ? html`${e.cp} ${e.ville}<br />` : null}
           ${e.tel ? html`Tél. ${e.tel}<br />` : null}${e.email ? html`${e.email}<br />` : null}
           ${e.siret ? html`SIRET ${e.siret}` : null}
@@ -949,26 +1069,26 @@ function DocClient({ d, onBack }) {
 
 function Courses({ d, onBack }) {
   const c = calcDevis(d);
-  const texte = `Courses – ${d.numero} ${d.client.nom}\n` + c.courses.map((e) => `- ${e.nb} × ${e.produit.nom} (${fmt(e.produit.contenance)} ${e.produit.unite})`).join('\n');
+  const texte = `Courses – ${d.client.nom}\n` + c.courses.map((e) => `- ${e.nb} × ${e.produit.nom} (${fmt(e.produit.contenance)} ${e.produit.unite})`).join('\n');
   const copier = () => {
-    try { navigator.clipboard.writeText(texte).then(() => toast('Liste copiée'), () => toast('Copie impossible, sélectionnez le texte')); } catch (e) { toast('Copie impossible'); }
+    try { navigator.clipboard.writeText(texte).then(() => toast('Liste copiée : collez-la dans un SMS ou un mail'), () => toast('Copie impossible')); } catch (e) { toast('Copie impossible'); }
   };
   return html`<div class="section">
     <div class="doc-bar no-print">
       <button type="button" class="btn ghost" onClick=${onBack}>${Icon.back} Retour au devis</button>
-      <div class="row"><button type="button" class="btn" onClick=${copier}>Copier la liste</button>
-      <button type="button" class="btn primary" onClick=${() => { try { window.print(); } catch (err) {} }}>Imprimer</button></div>
+      <div class="row"><button type="button" class="btn primary" onClick=${copier}>Copier la liste</button>
+      <button type="button" class="btn" onClick=${() => { try { window.print(); } catch (err) {} }}>Imprimer</button></div>
     </div>
     <article class="doc">
-      <div class="dh"><div><h1>Liste de courses</h1><div>${d.numero} · ${d.client.nom} · ${d.objet}</div></div>
-        <div class="dref"><div>Pertes incluses : ${pct(num(d.params.pertes), 0)}</div><div>${fmt(c.heures, 1)} h de travail prévues</div></div></div>
+      <div class="dh"><div><h1>Liste de courses</h1><div>${d.client.nom} · ${d.objet}</div></div>
+        <div class="dref"><div>Perte de produit comprise : ${pct(num(d.params.pertes), 0)}</div><div>${fmt(c.heures, 1)} h de travail prévues</div></div></div>
       ${c.courses.length ? html`<div class="tbl-wrap"><table>
-        <thead><tr><th>Produit</th><th class="n">Besoin</th><th class="n">Conditionnement</th><th class="n">À acheter</th><th class="n">Coût HT</th></tr></thead>
+        <thead><tr><th>Produit</th><th class="n">À acheter</th><th class="n">Besoin</th><th class="n">Coût HT</th></tr></thead>
         <tbody>${c.courses.map((e) => html`<tr>
-          <td>${e.produit.nom}</td><td class="n">${fmt(e.besoin, 1)} ${e.produit.unite}</td><td class="n">${fmt(e.produit.contenance)} ${e.produit.unite}</td>
-          <td class="n"><b>${e.nb}</b></td><td class="n">${eur(e.cout)}</td></tr>`)}</tbody>
+          <td>${e.produit.nom}</td><td class="n"><b>${e.nb} × ${fmt(e.produit.contenance)} ${e.produit.unite}</b></td><td class="n">${fmt(e.besoin, 1)} ${e.produit.unite}</td>
+          <td class="n">${eur(e.cout)}</td></tr>`)}</tbody>
       </table></div>
-      <div class="totals"><span class="big">Total fournitures HT</span><span class="n big">${eur(c.coutFourn)}</span></div>` : html`<p>Aucune fourniture : ajoutez des ouvrages au devis.</p>`}
+      <div class="totals"><span class="big">Total produits HT</span><span class="n big">${eur(c.coutFourn)}</span></div>` : html`<p>Aucun produit : ajoutez des travaux au devis.</p>`}
     </article>
   </div>`;
 }
@@ -981,6 +1101,11 @@ function setPrix(p, v) {
     p.prix = num(v); p.maj = today(); p.exemple = false;
   });
   return true;
+}
+const CONTENANTS = { L: 'Pot', kg: 'Sac', 'm²': 'Rouleau', ml: 'Rouleau', rouleau: '', pièce: '', lot: 'Lot' };
+function condLabel(p) {
+  if (num(p.contenance) === 1 && ['rouleau', 'pièce', 'lot'].includes(p.unite)) return '1 ' + p.unite;
+  return ((CONTENANTS[p.unite] ?? '') + ' ' + fmt(p.contenance) + ' ' + p.unite).trim();
 }
 function Produits() {
   const s = state;
@@ -995,9 +1120,14 @@ function Produits() {
   const groupes = cats.map((c) => [c, list.filter((p) => p.categorie === c)]).filter(([, l]) => l.length);
   const vieux = s.produits.filter((p) => ageDays(p.maj) > 180).length;
   const nouveau = () => {
-    const p = { id: uid(), nom: 'Nouveau produit', categorie: cat || 'Peinture', unite: 'L', contenance: 1, prix: 0, rendement: null, fournisseur: '', ref: '', maj: today(), historique: [] };
+    const p = { id: uid(), nom: '', categorie: cat || 'Peinture', unite: 'L', contenance: 1, prix: 0, rendement: null, fournisseur: '', ref: '', maj: today(), historique: [] };
     update((s) => { s.produits.unshift(p); });
     setQ(''); setOpen(p.id);
+  };
+  const fermer = () => {
+    const p = enCours;
+    if (p && !p.nom.trim() && !num(p.prix)) update((s) => { s.produits = s.produits.filter((x) => x !== p); });
+    setOpen(null);
   };
   const onImport = async (e) => {
     const f = e.target.files[0]; e.target.value = '';
@@ -1015,37 +1145,34 @@ function Produits() {
     <div class="section-head">
       <h1>Produits</h1>
       <div class="row">
-        <button type="button" class="btn" onClick=${() => setOutil(!outil)}>Mettre à jour les prix</button>
-        <button type="button" class="btn primary" onClick=${nouveau}>${Icon.plus} Produit</button>
+        <button type="button" class="btn" onClick=${() => setOutil(!outil)}>Hausse de prix</button>
+        <button type="button" class="btn primary" onClick=${nouveau}>${Icon.plus} Nouveau produit</button>
       </div>
     </div>
-    ${s.produits.some((p) => p.exemple) ? html`<div class="banner warn"><span>Les prix affichés sont des exemples. Remplacez-les par vos tarifs fournisseur (directement dans la liste ou par import de fichier).</span></div>` : null}
+    ${s.produits.some((p) => p.exemple) ? html`<div class="banner warn"><span>Les prix ci-dessous sont des exemples : touchez un prix pour mettre le vôtre.</span></div>` : null}
     ${vieux ? html`<div class="banner warn"><span>${vieux} prix n'ont pas été vérifiés depuis plus de 6 mois.</span></div>` : null}
     ${outil ? html`<${OutilPrix} onImport=${() => fileRef.current.click()} />` : null}
     <input ref=${fileRef} type="file" accept=".csv,text/csv" hidden onChange=${onImport} />
+    ${enCours ? html`<${ProduitEdit} key=${enCours.id} p=${enCours} onClose=${fermer} />` : null}
     <div class="row">
-      <div class="grow" style="flex-basis:220px"><input id="q-prod" type="text" placeholder="Rechercher un produit, une réf, un fournisseur…" value=${q} onInput=${(e) => setQ(e.target.value)} /></div>
-      <select id="f-cat" style="width:auto" value=${cat} onChange=${(e) => setCat(e.target.value)}>
+      <div class="grow" style="flex-basis:220px"><input id="q-prod" type="search" placeholder="Chercher un produit…" value=${q} onInput=${(e) => setQ(e.target.value)} /></div>
+      ${expert() ? html`<select id="f-cat" style="width:auto" value=${cat} onChange=${(e) => setCat(e.target.value)}>
         <option value="">Toutes catégories</option>${cats.map((c) => html`<option value=${c}>${c}</option>`)}
-      </select>
+      </select>` : null}
     </div>
-    ${enCours ? html`<${ProduitEdit} key=${enCours.id} p=${enCours} onClose=${() => setOpen(null)} />` : null}
     <div class="card">
       ${groupes.length === 0 ? html`<div class="empty">Aucun produit.</div>` : groupes.map(([c, l]) => html`
         <div class="cat-title">${c}</div>
         <div class="plist">${l.map((p) => html`<div class="prow" key=${p.id}>
             <div class="grow">
-              <button type="button" class="pn" onClick=${() => setOpen(p.id)}>${p.nom}</button>
-              <div class="pm"><span>${fmt(p.contenance)} ${p.unite}</span>
-                ${num(p.contenance) ? html`<span>${eur(num(p.prix) / num(p.contenance))}/${p.unite}</span>` : null}
-                ${num(p.rendement) ? html`<span>1 ${p.unite} = ${fmt(p.rendement)} m²</span>` : null}
-                ${p.fournisseur ? html`<span>${p.fournisseur}</span>` : null}
-                <span class=${ageDays(p.maj) > 180 ? 'old' : ''}>prix du ${dateFr(p.maj)}</span></div>
+              <button type="button" class="pn" onClick=${() => setOpen(p.id)}>${p.nom || 'Produit sans nom'}</button>
+              <div class="pm"><span>${condLabel(p)}${num(p.contenance) && num(p.contenance) !== 1 ? ' · ' + eur(num(p.prix) / num(p.contenance)) + '/' + p.unite : ''}</span>
+                ${ageDays(p.maj) > 180 ? html`<span class="old">prix du ${dateFr(p.maj)}, à vérifier</span>` : null}</div>
             </div>
-            <${NumIn} id=${'pp-' + p.id} value=${p.prix} suffix="€" onCommit=${(v) => { if (setPrix(p, v)) toast('Prix enregistré'); }} />
+            <${NumIn} id=${'pp-' + p.id} value=${p.prix} suffix="€" onCommit=${(v) => { const ancien = p.prix; if (setPrix(p, v)) toast('Prix enregistré (avant : ' + eur(num(ancien)) + ')'); }} />
           </div>`)}</div>`)}
     </div>
-    <p class="hint">Touchez un prix pour le modifier : l'ancien prix est gardé dans l'historique. Les devis déjà envoyés gardent les prix du jour où ils ont été faits.</p>
+    <p class="hint">Touchez un prix pour le changer : l'ancien est gardé. Les devis déjà envoyés ne changent pas.</p>
   </section>`;
 }
 
@@ -1064,45 +1191,50 @@ function OutilPrix({ onImport }) {
     toast(`${cible.length} prix mis à jour`); setTaux(null);
   };
   return html`<div class="card">
-    <span class="tape">Hausse ou baisse générale</span>
+    <span class="tape">Changer plusieurs prix d'un coup</span>
+    <div class="chips"><button type="button" class=${'chip big' + (sens > 0 ? ' on' : '')} onClick=${() => setSens(1)}>Hausse</button><button type="button" class=${'chip big' + (sens < 0 ? ' on' : '')} onClick=${() => setSens(-1)}>Baisse</button></div>
     <div class="fields">
-      <${Field} label="Variation"><div class="row" style="flex-wrap:nowrap">
-        <div class="chips" style="flex-wrap:nowrap"><button type="button" class=${'chip' + (sens > 0 ? ' on' : '')} onClick=${() => setSens(1)}>Hausse</button><button type="button" class=${'chip' + (sens < 0 ? ' on' : '')} onClick=${() => setSens(-1)}>Baisse</button></div>
-        <${NumIn} id="op-t" value=${taux} placeholder="ex. 4,5" suffix="%" onSet=${setTaux} /></div><//>
-      <${Field} label="Fournisseur"><select id="op-f" value=${four} onChange=${(e) => setFour(e.target.value)}><option value="">Tous</option>${fours.map((f) => html`<option value=${f}>${f}</option>`)}</select><//>
-      <${Field} label="Catégorie"><select id="op-c" value=${cat} onChange=${(e) => setCat(e.target.value)}><option value="">Toutes</option>${[...new Set(s.produits.map((p) => p.categorie))].map((c) => html`<option value=${c}>${c}</option>`)}</select><//>
+      <${Field} label="De combien ?"><${NumIn} id="op-t" value=${taux} placeholder="ex. 4,5" suffix="%" onSet=${setTaux} /><//>
+      ${fours.length > 1 ? html`<${Field} label="Chez quel fournisseur ?"><select id="op-f" value=${four} onChange=${(e) => setFour(e.target.value)}><option value="">Tous</option>${fours.map((f) => html`<option value=${f}>${f}</option>`)}</select><//>` : null}
+      <${Field} label="Quels produits ?"><select id="op-c" value=${cat} onChange=${(e) => setCat(e.target.value)}><option value="">Tous</option>${[...new Set(s.produits.map((p) => p.categorie))].map((c) => html`<option value=${c}>${c}</option>`)}</select><//>
     </div>
-    <div class="row"><button type="button" class="btn primary" disabled=${!num(taux)} onClick=${appliquer}>Appliquer à ${cible.length} produit${cible.length > 1 ? 's' : ''}</button>
-</div>
-    <span class="tape">Avec un tableur (Excel)</span>
-    <p class="small">Exportez la liste, modifiez les prix dans Excel ou LibreOffice, puis importez le fichier : les produits sont reconnus par leur référence ou leur nom, et les nouveaux sont ajoutés.</p>
+    <div><button type="button" class="btn primary" disabled=${!num(taux)} onClick=${appliquer}>${sens > 0 ? 'Augmenter' : 'Baisser'} ${cible.length} prix</button></div>
+    ${expert() ? html`<span class="tape">Avec Excel</span>
+    <p class="small">Exportez la liste, modifiez les prix dans Excel ou LibreOffice, puis importez le fichier : les produits sont reconnus et les nouveaux sont ajoutés.</p>
     <div class="row">
       <button type="button" class="btn" onClick=${() => { if (!download('produits-' + today() + '.csv', produitsCSV(), 'text/csv;charset=utf-8')) toast('Téléchargement impossible ici'); }}>Exporter la liste (.csv)</button>
       <button type="button" class="btn" onClick=${onImport}>Importer un fichier (.csv)</button>
-    </div>
+    </div>` : null}
   </div>`;
 }
 
 function ProduitEdit({ p, onClose }) {
+  const [plus, setPlus] = useState(false);
   const set = (fn) => update(() => { fn(p); p.exemple = false; });
   const used = state.ouvrages.filter((o) => o.fournitures.some((f) => f.produitId === p.id));
-  return html`<div class="card" style="margin:8px 0;border-color:var(--accent)">
+  const autres = state.ouvrages.filter((o) => !used.includes(o));
+  return html`<div class="card edit-card">
     <div class="fields">
-      <${Field} label="Nom" wide><${TextIn} id=${'pe-n-' + p.id} value=${p.nom} onSet=${(v) => set((p) => { p.nom = v; })} /><//>
-      <${Field} label="Catégorie"><input id=${'pe-c-' + p.id} type="text" list="cats" value=${p.categorie} onInput=${(e) => set((p) => { p.categorie = e.target.value; })} /><//>
-      <${Field} label="Unité"><input id=${'pe-u-' + p.id} type="text" list="unites" value=${p.unite} onInput=${(e) => set((p) => { p.unite = e.target.value; })} /><//>
-      <${Field} label="Contenance du conditionnement" hint=${'Ex. pot de 15 ' + p.unite}><${NumIn} id=${'pe-ct-' + p.id} value=${p.contenance} onSet=${(v) => set((p) => { p.contenance = v; })} /><//>
-      <${Field} label="Prix d'achat HT du conditionnement"><${NumIn} id=${'pe-p-' + p.id} value=${p.prix} suffix="€" onCommit=${(v) => setPrix(p, v)} /><//>
-      <${Field} label="Rendement" hint=${'m² (ou ml) couverts par 1 ' + p.unite + ', pour une couche'}><${NumIn} id=${'pe-r-' + p.id} value=${p.rendement} placeholder="ex. 10" onSet=${(v) => set((p) => { p.rendement = v; })} /><//>
-      <${Field} label="Fournisseur"><${TextIn} id=${'pe-f-' + p.id} value=${p.fournisseur} onSet=${(v) => set((p) => { p.fournisseur = v; })} /><//>
-      <${Field} label="Référence"><${TextIn} id=${'pe-ref-' + p.id} value=${p.ref} onSet=${(v) => set((p) => { p.ref = v; })} /><//>
+      <${Field} label="Nom du produit" wide><${TextIn} id=${'pe-n-' + p.id} value=${p.nom} placeholder="Ex. Peinture velours blanc 15 L" onSet=${(v) => set((p) => { p.nom = v; })} /><//>
+      <${Field} label="Vendu par"><input id=${'pe-u-' + p.id} type="text" list="unites" value=${p.unite} onInput=${(e) => set((p) => { p.unite = e.target.value; })} /><//>
+      <${Field} label=${'Taille du pot / sac (en ' + (p.unite || 'unités') + ')'} hint=${'Ex. 15 pour un pot de 15 ' + p.unite}><${NumIn} id=${'pe-ct-' + p.id} value=${p.contenance} onSet=${(v) => set((p) => { p.contenance = v; })} /><//>
+      <${Field} label="Prix d'achat HT"><${NumIn} id=${'pe-p-' + p.id} value=${p.prix} suffix="€" onCommit=${(v) => setPrix(p, v)} /><//>
+      <${Field} label=${'m² couverts avec 1 ' + (p.unite || 'unité')} hint="Pour une couche (voir la fiche du produit)"><${NumIn} id=${'pe-r-' + p.id} value=${p.rendement} placeholder="ex. 10" onSet=${(v) => set((p) => { p.rendement = v; })} /><//>
+      <${Field} label="Rangé dans"><input id=${'pe-c-' + p.id} type="text" list="cats" value=${p.categorie} onInput=${(e) => set((p) => { p.categorie = e.target.value; })} /><//>
+      ${plus ? html`
+        <${Field} label="Fournisseur"><${TextIn} id=${'pe-f-' + p.id} value=${p.fournisseur} onSet=${(v) => set((p) => { p.fournisseur = v; })} /><//>
+        <${Field} label="Référence"><${TextIn} id=${'pe-ref-' + p.id} value=${p.ref} onSet=${(v) => set((p) => { p.ref = v; })} /><//>` : null}
     </div>
-    ${p.historique && p.historique.length ? html`<div class="hist"><span class="lab">Historique des prix</span>
+    ${!plus ? html`<div><button type="button" class="btn ghost sm" onClick=${() => setPlus(true)}>+ Fournisseur, référence</button></div>` : null}
+    ${p.historique && p.historique.length ? html`<div class="hist"><span class="lab">Anciens prix</span>
       ${[...p.historique].reverse().map((h) => html`<span>${dateFr(h.date)} : ${eur(num(h.prix))}</span>`)}<span>${dateFr(p.maj)} : <b>${eur(num(p.prix))}</b> (actuel)</span></div>` : null}
-    ${used.length ? html`<p class="hint">Utilisé dans : ${used.map((o) => o.nom).join(', ')}</p>` : null}
+    ${used.length ? html`<p class="hint">Utilisé dans : ${used.map((o) => o.nom).join(', ')}</p>`
+      : html`<div class="banner warn"><span>Ce produit n'est utilisé dans aucun travail : il ne sera pas compté dans les devis.</span>
+        ${autres.length ? html`<select id=${'pe-use-' + p.id} style="width:auto" onChange=${(e) => { const o = ouvById(e.target.value); if (o) { update(() => { o.fournitures.push({ produitId: p.id, couches: 1, conso: null }); }); toast('Ajouté à « ' + o.nom + ' »'); } e.target.value = ''; }}>
+          <option value="">L'ajouter à un travail…</option>${autres.map((o) => html`<option value=${o.id}>${o.nom}</option>`)}</select>` : null}</div>`}
     <div class="row between">
-      <button type="button" class="btn primary" onClick=${onClose}>Fermer</button>
-      <${ConfirmBtn} label="Supprimer" confirm=${used.length ? 'Supprimer (retiré des ouvrages) ?' : 'Supprimer ?'} onConfirm=${() => {
+      <button type="button" class="btn primary big" onClick=${onClose}>Terminé</button>
+      <${ConfirmBtn} label="Supprimer" confirm=${used.length ? 'Supprimer (et retirer des travaux) ?' : 'Supprimer ?'} onConfirm=${() => {
         update((s) => { s.produits = s.produits.filter((x) => x.id !== p.id); s.ouvrages.forEach((o) => { o.fournitures = o.fournitures.filter((f) => f.produitId !== p.id); }); });
         onClose();
       }} />
@@ -1112,26 +1244,27 @@ function ProduitEdit({ p, onClose }) {
   </div>`;
 }
 
-/* ---------------------------------------------------------- Ouvrages */
+/* ---------------------------------------------------------- Travaux (ouvrages) */
+const parSurface = (base) => ['murs', 'plafond', 'sol', 'perimetre'].includes(base);
 function Ouvrages() {
   const s = state;
   const [open, setOpen] = useState(null);
   const o = open && s.ouvrages.find((x) => x.id === open);
   if (o) return html`<${OuvrageEdit} o=${o} onClose=${() => setOpen(null)} />`;
   const nouveau = () => {
-    const n = { id: uid(), nom: 'Nouvel ouvrage', base: 'murs', temps: 0.1, fournitures: [] };
+    const n = { id: uid(), nom: '', base: 'murs', temps: 0.1, fournitures: [] };
     update((s) => { s.ouvrages.push(n); });
     setOpen(n.id);
   };
   return html`<section class="section">
-    <div class="section-head"><h1>Ouvrages</h1><button type="button" class="btn primary" onClick=${nouveau}>${Icon.plus} Ouvrage</button></div>
-    <p class="muted">Un ouvrage, c'est un travail type (ex. « Peinture murs 2 couches ») : le temps qu'il vous faut par m² et les produits qu'il consomme. Le prix se calcule tout seul dans les devis.</p>
+    <div class="section-head"><h1>Travaux</h1><button type="button" class="btn primary" onClick=${nouveau}>${Icon.plus} Nouveau travail</button></div>
+    <p class="muted">Ici, vous réglez votre façon de chiffrer : pour chaque travail, combien de m² vous faites en une heure et quels produits il faut. Le prix se calcule ensuite tout seul dans les devis.</p>
     <div class="olist">${s.ouvrages.map((o) => {
       const c = calcOuvrageIndicatif(o, s.settings);
       const u = BASES[o.base]?.unite;
       return html`<button type="button" class="card oitem" key=${o.id} onClick=${() => setOpen(o.id)}>
-        <div style="font-weight:600">${o.nom}</div>
-        <div class="op"><span class="muted small">${BASES[o.base]?.label.split(' (')[0]} · ${fmt(o.temps, 3)} h/${u}</span><span class="opv">${eur(c.vente)}<span class="small muted"> /${u}</span></span></div>
+        <div style="font-weight:600">${o.nom || 'Travail sans nom'}</div>
+        <div class="op"><span class="muted small">${parSurface(o.base) && num(o.temps) ? fmt(1 / num(o.temps), 1) + ' ' + u + ' à l\'heure' : fmt(o.temps, 2) + ' h par ' + u}</span><span class="opv">${eur(c.vente)}<span class="small muted"> /${u}</span></span></div>
         <div class="muted small">${o.fournitures.length ? o.fournitures.map((f) => prodById(f.produitId)?.nom).filter(Boolean).join(' · ') : 'Main d\'œuvre seule'}</div>
       </button>`;
     })}</div>
@@ -1144,17 +1277,21 @@ function OuvrageEdit({ o, onClose }) {
   const c = calcOuvrageIndicatif(o, s.settings);
   const u = BASES[o.base]?.unite;
   const prods = s.produits.slice().sort((a, b) => a.categorie.localeCompare(b.categorie) || a.nom.localeCompare(b.nom));
+  const couchesUtiles = (p) => p && (p.unite === 'L' || ['Peinture', 'Sous-couche'].includes(p.categorie));
   return html`<section class="section">
-    <div class="row between"><button type="button" class="btn ghost" onClick=${onClose}>${Icon.back} Tous les ouvrages</button></div>
+    <div class="row between"><button type="button" class="btn ghost" onClick=${onClose}>${Icon.back} Tous les travaux</button></div>
     <div class="card">
       <div class="fields">
-        <${Field} label="Nom (apparaît sur le devis)" wide><${TextIn} id="oe-n" value=${o.nom} onSet=${(v) => set((o) => { o.nom = v; })} /><//>
+        <${Field} label="Nom (écrit sur le devis)" wide><${TextIn} id="oe-n" value=${o.nom} placeholder="Ex. Peinture murs 2 couches" onSet=${(v) => set((o) => { o.nom = v; })} /><//>
         <${Field} label="Se calcule sur"><select id="oe-b" value=${o.base} onChange=${(e) => set((o) => { o.base = e.target.value; })}>${Object.entries(BASES).map(([k, b]) => html`<option value=${k}>${b.label}</option>`)}</select><//>
-        <${Field} label=${'Temps par ' + u} hint=${num(o.temps) ? 'soit ' + fmt(1 / num(o.temps), 1) + ' ' + u + ' à l\'heure' : ''}><${NumIn} id="oe-t" value=${o.temps} suffix="h" onSet=${(v) => set((o) => { o.temps = v; })} /><//>
+        ${parSurface(o.base)
+          ? html`<${Field} label=${u + ' faits en 1 heure'} hint="Votre vitesse moyenne, préparation comprise"><${NumIn} id="oe-v" value=${num(o.temps) ? round2(1 / num(o.temps)) : null} suffix=${u + '/h'} onSet=${(v) => set((o) => { o.temps = v > 0 ? 1 / v : 0; })} /><//>`
+          : html`<${Field} label=${'Heures par ' + (u === 'u' ? 'pièce' : u)}><${NumIn} id="oe-t" value=${o.temps} suffix="h" onSet=${(v) => set((o) => { o.temps = v; })} /><//>`}
       </div>
     </div>
     <div class="card">
       <span class="tape">Produits utilisés</span>
+      ${o.fournitures.length ? null : html`<p class="muted">Aucun produit : seulement du temps de travail.</p>`}
       ${o.fournitures.map((f, i) => {
         const p = prodById(f.produitId);
         const auto = p && num(p.rendement) ? (hasVal(f.couches) ? num(f.couches) : 1) / num(p.rendement) : null;
@@ -1162,45 +1299,44 @@ function OuvrageEdit({ o, onClose }) {
         return html`<div class="frow" key=${i}>
           <${Field} label="Produit"><select id=${'of-p-' + i} value=${f.produitId} onChange=${(e) => set(() => { f.produitId = e.target.value; })}>
             ${prods.map((x) => html`<option value=${x.id}>${x.nom}</option>`)}</select><//>
-          <${Field} label="Couches"><${NumIn} id=${'of-c-' + i} value=${f.couches} onSet=${(v) => set(() => { f.couches = v; })} /><//>
-          <${Field} label=${(p ? p.unite : '') + ' par ' + u}><${NumIn} id=${'of-q-' + i} value=${f.conso} placeholder=${auto != null ? fmt(auto, 3) : 'à saisir'} onSet=${(v) => set(() => { f.conso = v; })} /><//>
-          <button type="button" class="x" aria-label="Retirer" onClick=${() => set((o) => { o.fournitures.splice(i, 1); })}>×</button>
-          ${manque ? html`<p class="small mg-bad" style="grid-column:1/-1">Ce produit n'a pas de rendement : il ne sera pas compté. Indiquez son rendement dans Produits ou une quantité par ${u}.</p>` : null}
+          ${couchesUtiles(p) ? html`<${Field} label="Couches"><${NumIn} id=${'of-c-' + i} value=${f.couches} onSet=${(v) => set(() => { f.couches = v; })} /><//>` : html`<span></span>`}
+          ${expert() || manque || hasVal(f.conso) ? html`<${Field} label=${(p ? p.unite : '') + ' par ' + u}><${NumIn} id=${'of-q-' + i} value=${f.conso} placeholder=${auto != null ? fmt(auto, 3) : 'à remplir'} onSet=${(v) => set(() => { f.conso = v; })} /><//>` : html`<span></span>`}
+          <button type="button" class="x" aria-label="Retirer le produit" onClick=${() => set((o) => { o.fournitures.splice(i, 1); })}>×</button>
+          ${manque ? html`<p class="small mg-bad" style="grid-column:1/-1">On ne sait pas combien en mettre : indiquez les m² couverts dans la fiche du produit, ou la quantité par ${u} ici.</p>` : null}
         </div>`;
       })}
-      <p class="hint">La consommation se calcule avec le rendement du produit et le nombre de couches. Remplissez « par ${u} » seulement pour forcer une autre valeur.</p>
-      <div><button type="button" class="btn sm" disabled=${!prods.length} onClick=${() => set((o) => { o.fournitures.push({ produitId: prods[0].id, couches: 1, conso: null }); })}>${Icon.plus} Ajouter un produit</button></div>
+      <div><button type="button" class="btn" disabled=${!prods.length} onClick=${() => set((o) => { o.fournitures.push({ produitId: prods[0].id, couches: 1, conso: null }); })}>${Icon.plus} Ajouter un produit</button></div>
     </div>
     <div class="card">
-      <span class="tape">Prix indicatif</span>
+      <span class="tape">Ce que ça donne</span>
       <div class="kpis">
-        <div class="kpi"><span class="k">Prix de vente</span><span class="v">${eur(c.vente)}</span><span class="s">HT par ${u}</span></div>
-        <div class="kpi"><span class="k">Fournitures</span><span class="v">${eur(c.coutFourn)}</span><span class="s">coût d'achat par ${u}</span></div>
-        <div class="kpi"><span class="k">Marge nette</span><span class="v">${pct(c.vente ? c.marge / c.vente : 0)}</span><span class="s">${eur(c.marge)} par ${u}</span></div>
+        <div class="kpi"><span class="k">Prix pour le client</span><span class="v">${eur(c.vente)}</span><span class="s">HT par ${u}</span></div>
+        <div class="kpi"><span class="k">Produits</span><span class="v">${eur(c.coutFourn)}</span><span class="s">prix d'achat par ${u}</span></div>
+        <div class="kpi"><span class="k">Votre bénéfice</span><span class="v">${pct(c.vente ? c.marge / c.vente : 0, 0)}</span><span class="s">${eur(c.marge)} par ${u}</span></div>
       </div>
-      <p class="hint">Avec les tarifs par défaut : ${eur(s.settings.tauxHoraire)}/h facturé, fournitures × ${fmt(s.settings.coefFournitures)}, ${pct(s.settings.pertes, 0)} de pertes.</p>
+      <p class="hint">Avec vos réglages : ${eur0(s.settings.tauxHoraire)} de l'heure, ${pct(num(s.settings.coefFournitures) - 1, 0)} de marge sur les produits.</p>
     </div>
     <div class="row between">
       <div class="row">
-        <button type="button" class="btn primary" onClick=${onClose}>Terminé</button>
-        <button type="button" class="btn" onClick=${() => { update((s) => { s.ouvrages.push({ ...JSON.parse(JSON.stringify(o)), id: uid(), nom: o.nom + ' (copie)' }); }); toast('Ouvrage dupliqué'); }}>Dupliquer</button>
+        <button type="button" class="btn primary big" onClick=${onClose}>Terminé</button>
+        <button type="button" class="btn" onClick=${() => { update((s) => { s.ouvrages.push({ ...JSON.parse(JSON.stringify(o)), id: uid(), nom: o.nom + ' (copie)' }); }); toast('Travail copié'); }}>Faire une copie</button>
       </div>
       <${ConfirmBtn} label="Supprimer" onConfirm=${() => { update((s) => { s.ouvrages = s.ouvrages.filter((x) => x.id !== o.id); }); onClose(); }} />
     </div>
   </section>`;
 }
 
-/* ---------------------------------------------------------- Bilan / REX */
+/* ---------------------------------------------------------- Bilan / retour d'expérience */
 function Bilan({ onOpen }) {
   const s = state;
   const [periode, setPeriode] = useState('tout');
+  const [voirDetail, setVoirDetail] = useState(false);
   const lim = periode === '12m' ? daysAgo(365) : periode === 'annee' ? new Date().getFullYear() + '-01-01' : '';
   const ds = s.devis.filter((d) => !lim || d.date >= lim).map((d) => ({ d, c: calcDevis(d) }));
   const acc = ds.filter((x) => x.d.statut === 'accepte');
   const ref = ds.filter((x) => x.d.statut === 'refuse');
   const env = ds.filter((x) => x.d.statut === 'envoye');
   const decides = acc.length + ref.length;
-  const taux = decides ? acc.length / decides : null;
   const ca = sum(acc, (x) => x.c.signe);
   const mAcc = acc.map((x) => x.c.margeSigneePct);
   const mRef = ref.map((x) => x.c.margePct);
@@ -1211,8 +1347,9 @@ function Bilan({ onOpen }) {
   const moyReelle = avg(rex.map((x) => x.c.margeReellePct));
   const minAcc = mAcc.length ? Math.min(...mAcc) : null, maxAcc = mAcc.length ? Math.max(...mAcc) : null;
   const mini = num(s.settings.margeMini);
+  const taux = decides ? acc.length / decides : null;
 
-  // Prix au m² par ouvrage, signés vs refusés
+  // Prix au m² par travail, signés et refusés
   const parOuv = new Map();
   for (const { d, c } of [...acc, ...ref]) {
     const k = c.sousTotal > 0 ? (d.statut === 'accepte' ? c.signe : c.totalHT) / c.sousTotal : 1;
@@ -1227,76 +1364,75 @@ function Bilan({ onOpen }) {
   }
   const ouvRows = [...parOuv.values()].sort((a, b) => b.acc.v + b.ref.v - (a.acc.v + a.ref.v));
 
+  // Conseils, du plus important au moins important : on n'en montre que 2
   const conseils = [];
-  if (acc.length >= 2) conseils.push(html`Vos devis signés dégagent une marge nette de <b>${pct(minAcc, 0)}</b> à <b>${pct(maxAcc, 0)}</b> (moyenne ${pct(moyAcc, 0)}). Des clients ont déjà accepté ${pct(maxAcc, 0)} : vous pouvez partir de là, puis négocier sans descendre sous votre minimum de ${pct(mini, 0)} (le prix plancher est indiqué dans chaque devis).`);
+  if (ecartH != null && ecartH > 0.04) conseils.push(html`Vos chantiers prennent <b>${pct(ecartH, 0)} de temps en plus</b> que prévu. Dans « Travaux », baissez un peu les m² faits à l'heure pour ne pas travailler gratuitement.`);
   const sousMini = mAcc.filter((m) => m < mini).length;
-  if (sousMini) conseils.push(html`<b>${sousMini} devis signé${sousMini > 1 ? 's sont' : ' est'}</b> sous votre marge minimum de ${pct(mini, 0)} : vous y avez travaillé presque sans bénéfice.`);
-  if (nego != null && nego > 0.005) conseils.push(html`Vos clients obtiennent en moyenne <b>${pct(nego)}</b> de remise. Prévoyez cette marge dans le prix de départ pour ne pas la prendre sur votre bénéfice.`);
-  if (moyRef != null && moyAcc != null && moyRef > moyAcc + 0.05) conseils.push(html`Les devis refusés avaient une marge plus haute (<b>${pct(moyRef, 0)}</b> contre ${pct(moyAcc, 0)}) : le prix a sans doute pesé dans le refus.`);
-  if (moyRef != null && moyAcc != null && moyRef <= moyAcc + 0.05 && ref.length >= 2) conseils.push(html`Les devis refusés n'étaient pas plus chers en marge que les signés : le refus vient peut-être d'autre chose (délai, relance, présentation).`);
-  if (ecartH != null && Math.abs(ecartH) > 0.04) conseils.push(html`Sur les chantiers terminés, vous passez en moyenne <b>${ecartH > 0 ? '+' : ''}${pct(ecartH, 0)}</b> de temps ${ecartH > 0 ? 'en plus' : 'en moins'} que prévu. ${ecartH > 0 ? 'Augmentez les temps de vos ouvrages pour ne pas travailler gratuitement.' : 'Vous avez de la marge sur vos temps.'}`);
-  if (taux != null && decides >= 3 && taux > 0.8) conseils.push(html`Avec <b>${pct(taux, 0)}</b> de devis signés, vous pouvez sans doute monter un peu vos prix.`);
-  if (taux != null && decides >= 3 && taux < 0.35) conseils.push(html`Seulement <b>${pct(taux, 0)}</b> de devis signés : comparez vos prix au m² ci-dessous avec ceux des devis acceptés.`);
+  if (sousMini) conseils.push(html`<b>${sousMini} devis signé${sousMini > 1 ? 's' : ''}</b> vous ${sousMini > 1 ? 'ont' : 'a'} rapporté moins de ${pct(mini, 0)} de bénéfice. En négociation, ne descendez pas sous le prix mini affiché dans le devis.`);
+  if (nego != null && nego > 0.02) conseils.push(html`Vos clients obtiennent en moyenne <b>${pct(nego, 0)} de remise</b>. Pensez-y dans votre prix de départ.`);
+  if (moyRef != null && moyAcc != null && moyRef > moyAcc + 0.05) conseils.push(html`Vos devis refusés étaient plus chers (bénéfice ${pct(moyRef, 0)} contre ${pct(moyAcc, 0)}) : le prix a sans doute joué.`);
+  if (taux != null && decides >= 3 && taux > 0.8) conseils.push(html`Vous signez presque tout : vous pouvez sans doute monter un peu vos prix.`);
+  if (ecartH != null && ecartH < -0.04) conseils.push(html`Vous allez plus vite que prévu (${pct(-ecartH, 0)} de temps en moins) : bonne nouvelle pour votre bénéfice.`);
 
-  // Échelle des marges
+  // Échelle des bénéfices
   const all = [...mAcc, ...mRef];
   const hi = Math.max(0.5, Math.ceil((Math.max(0, ...all) + 0.05) * 10) / 10);
   const lo = Math.min(0, Math.floor(Math.min(0, ...all) * 10) / 10);
   const pos = (v) => ((v - lo) / (hi - lo)) * 100;
   const ticks = []; for (let t = lo; t <= hi + 1e-9; t += 0.1) ticks.push(round2(t));
 
+  if (!decides) return html`<section class="section"><h1>Bilan</h1>
+    <div class="card empty"><p>Le bilan se remplit tout seul quand vous indiquez si vos devis sont <b>signés</b> ou <b>refusés</b> (en haut de chaque devis).</p></div></section>`;
+
   return html`<section class="section">
-    <div class="section-head">
-      <h1>Bilan</h1>
+    <h1>Bilan</h1>
+    ${s.devis.some((d) => d.exemple) ? html`<div class="banner info"><span>Ce bilan compte aussi les devis d'exemple.</span></div>` : null}
+    <div class="card headline">
+      <p>Vous signez <b>${acc.length} devis sur ${decides}</b>${env.length ? html`, et ${env.length} attend${env.length > 1 ? 'ent' : ''} une réponse` : ''}.</p>
+      ${moyAcc != null ? html`<p>Sur un chantier signé, vous gagnez en moyenne <b class=${margeClass(moyAcc, mini)}>${pct(moyAcc, 0)}</b> du prix${moyReelle != null ? html` (<b>${pct(moyReelle, 0)}</b> en vrai, une fois le chantier fini)` : ''}.</p>` : null}
+      ${nego != null ? html`<p>Vos clients obtiennent <b>${pct(nego, 0)}</b> de remise en moyenne.</p>` : null}
+      <p class="muted">Chiffre signé : ${eur0(ca)} HT</p>
+    </div>
+    ${conseils.length ? html`<div class="card"><span class="tape">À retenir</span><ul class="advice">${conseils.slice(0, 2).map((t) => html`<li>${t}</li>`)}</ul></div>` : null}
+
+    <div><button type="button" class="btn" onClick=${() => setVoirDetail(!voirDetail)}>${voirDetail ? 'Masquer le détail' : 'Voir le détail (prix au m², chantiers)'}</button></div>
+    ${voirDetail ? html`
       <div class="chips">${[['tout', 'Tout'], ['12m', '12 derniers mois'], ['annee', 'Cette année']].map(([k, l]) => html`<button type="button" class=${'chip' + (periode === k ? ' on' : '')} onClick=${() => setPeriode(k)}>${l}</button>`)}</div>
-    </div>
-    ${s.devis.some((d) => d.exemple) ? html`<div class="banner info"><span>Ce bilan inclut les devis d'exemple.</span></div>` : null}
-    <div class="kpis">
-      <div class="kpi"><span class="k">Devis signés</span><span class="v">${pct(taux, 0)}</span><span class="s">${acc.length} signé(s) / ${decides} décidé(s)${env.length ? ' · ' + env.length + ' en attente' : ''}</span></div>
-      <div class="kpi"><span class="k">Chiffre signé HT</span><span class="v">${eur0(ca)}</span><span class="s">${env.length ? eur0(sum(env, (x) => x.c.totalHT)) + ' en attente de réponse' : 'aucun devis en attente'}</span></div>
-      <div class="kpi"><span class="k">Marge nette signée</span><span class=${'v ' + (moyAcc != null ? margeClass(moyAcc, mini) : '')}>${pct(moyAcc, 0)}</span><span class="s">${moyReelle != null ? 'réelle après chantier : ' + pct(moyReelle, 0) : 'moyenne des devis acceptés'}</span></div>
-      <div class="kpi"><span class="k">Remise accordée</span><span class="v">${pct(nego)}</span><span class="s">en moyenne sur les devis signés, négociation comprise</span></div>
-    </div>
-
-    ${all.length ? html`<div class="card">
-      <span class="tape">Votre marge de négociation</span>
-      <div class="scale" role="img" aria-label="Marge nette de chaque devis signé ou refusé">
-        <div class="axis"></div>
-        ${minAcc != null ? html`<div class="band" style=${`left:${pos(minAcc)}%;width:${Math.max(1, pos(maxAcc) - pos(minAcc))}%`}></div>` : null}
-        ${ticks.map((t) => html`<span class="tick" style=${`left:${pos(t)}%`}>${Math.round(t * 100)}%</span>`)}
-        ${ref.map((x) => html`<span class="dot ref" title=${x.d.client.nom + ' : ' + pct(x.c.margePct)} style=${`left:${pos(x.c.margePct)}%`}></span>`)}
-        ${acc.map((x) => html`<span class="dot acc" title=${x.d.client.nom + ' : ' + pct(x.c.margeSigneePct)} style=${`left:${pos(x.c.margeSigneePct)}%`}></span>`)}
-      </div>
-      <div class="legend"><span><i style="background:var(--ok)"></i>Devis signé</span><span><i style="background:var(--bad)"></i>Devis refusé</span><span><i style="background:var(--ok-soft)"></i>Zone acceptée par vos clients</span></div>
-      ${conseils.length ? html`<ul class="advice">${conseils.map((t) => html`<li>${t}</li>`)}</ul>` : html`<p class="muted">Les conseils apparaissent quand vous avez au moins deux devis signés.</p>`}
-    </div>` : html`<div class="card empty">Passez vos devis en « Accepté » ou « Refusé » pour voir votre bilan.</div>`}
-
-    ${ouvRows.length ? html`<div class="card">
-      <span class="tape">Prix pratiqués par ouvrage</span>
-      <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>Ouvrage</th><th class="n">Signé</th><th class="n">Refusé</th><th class="n">Qté signée</th></tr></thead>
-        <tbody>${ouvRows.map((r) => html`<tr>
-          <td>${r.nom}</td>
-          <td class="n">${r.acc.q ? eur(r.acc.v / r.acc.q) + '/' + r.unite : '–'}</td>
-          <td class="n">${r.ref.q ? eur(r.ref.v / r.ref.q) + '/' + r.unite : '–'}</td>
-          <td class="n">${r.acc.q ? fmt(r.acc.q, 0) + ' ' + r.unite : '–'}</td></tr>`)}</tbody>
-      </table></div>
-      <p class="hint">Prix moyen HT réellement facturé, remises et négociations comprises.</p>
-    </div>` : null}
-
-    ${acc.length ? html`<div class="card">
-      <span class="tape">Chantiers signés : prévu et réel</span>
-      <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>Client</th><th class="n">Signé HT</th><th class="n">Heures prévues / réelles</th><th class="n">Marge prévue</th><th class="n">Marge réelle</th></tr></thead>
-        <tbody>${acc.sort((a, b) => b.d.date.localeCompare(a.d.date)).map(({ d, c }) => html`<tr style="cursor:pointer" onClick=${() => onOpen(d.id)}>
-          <td>${d.client.nom}<div class="muted small">${d.numero} · ${dateFr(d.date)}</div></td>
-          <td class="n">${eur0(c.signe)}</td>
-          <td class="n">${fmt(c.heures, 0)} h / ${c.heuresReelles != null ? fmt(c.heuresReelles, 0) + ' h' : '–'}</td>
-          <td class="n">${pct(c.margeSigneePct, 0)}</td>
-          <td class="n">${c.rexSaisi ? html`<b class=${margeClass(c.margeReellePct, mini)}>${pct(c.margeReellePct, 0)}</b>` : html`<span class="muted">à saisir</span>`}</td></tr>`)}</tbody>
-      </table></div>
-      <p class="hint">Saisissez les heures et fournitures réelles dans chaque devis signé (rubrique Suivi) une fois le chantier fini.</p>
-    </div>` : null}
+      ${all.length ? html`<div class="card">
+        <span class="tape">Bénéfice de chaque devis</span>
+        <div class="scale" role="img" aria-label="Bénéfice de chaque devis signé ou refusé">
+          <div class="axis"></div>
+          ${minAcc != null ? html`<div class="band" style=${`left:${pos(minAcc)}%;width:${Math.max(1, pos(maxAcc) - pos(minAcc))}%`}></div>` : null}
+          ${ticks.map((t) => html`<span class="tick" style=${`left:${pos(t)}%`}>${Math.round(t * 100)}%</span>`)}
+          ${ref.map((x) => html`<span class="dot ref" style=${`left:${pos(x.c.margePct)}%`}></span>`)}
+          ${acc.map((x) => html`<span class="dot acc" style=${`left:${pos(x.c.margeSigneePct)}%`}></span>`)}
+        </div>
+        <div class="legend"><span><i style="background:var(--ok)"></i>Signé</span><span><i style="background:var(--bad)"></i>Refusé</span><span><i style="background:var(--ok-soft)"></i>Ce que vos clients acceptent</span></div>
+      </div>` : null}
+      ${ouvRows.length ? html`<div class="card">
+        <span class="tape">Vos prix par travail</span>
+        <div class="tbl-wrap"><table class="tbl cards">
+          <thead><tr><th>Travail</th><th class="n">Prix signé</th><th class="n">Prix refusé</th></tr></thead>
+          <tbody>${ouvRows.map((r) => html`<tr>
+            <td>${r.nom}</td>
+            <td class="n" data-label="Signé">${r.acc.q ? eur(r.acc.v / r.acc.q) + '/' + r.unite : '–'}</td>
+            <td class="n" data-label="Refusé">${r.ref.q ? eur(r.ref.v / r.ref.q) + '/' + r.unite : '–'}</td></tr>`)}</tbody>
+        </table></div>
+        <p class="hint">Prix moyen HT vraiment facturé, remises comprises.</p>
+      </div>` : null}
+      ${acc.length ? html`<div class="card">
+        <span class="tape">Chantiers signés</span>
+        <div class="tbl-wrap"><table class="tbl cards">
+          <thead><tr><th>Client</th><th class="n">Signé HT</th><th class="n">Heures prévues / vraies</th><th class="n">Bénéfice prévu</th><th class="n">Bénéfice vrai</th></tr></thead>
+          <tbody>${acc.slice().sort((a, b) => b.d.date.localeCompare(a.d.date)).map(({ d, c }) => html`<tr style="cursor:pointer" onClick=${() => onOpen(d.id)}>
+            <td><b>${d.client.nom}</b><div class="muted small">${dateFr(d.date)}</div></td>
+            <td class="n" data-label="Signé HT">${eur0(c.signe)}</td>
+            <td class="n" data-label="Heures prévues / vraies">${fmt(c.heures, 0)} h / ${c.heuresReelles != null ? fmt(c.heuresReelles, 0) + ' h' : '–'}</td>
+            <td class="n" data-label="Bénéfice prévu">${pct(c.margeSigneePct, 0)}</td>
+            <td class="n" data-label="Bénéfice vrai">${c.rexSaisi ? html`<b class=${margeClass(c.margeReellePct, mini)}>${pct(c.margeReellePct, 0)}</b>` : html`<span class="muted">à remplir</span>`}</td></tr>`)}</tbody>
+        </table></div>
+        <p class="hint">Touchez un chantier pour noter le temps passé en vrai.</p>
+      </div>` : null}` : null}
   </section>`;
 }
 
@@ -1313,65 +1449,77 @@ function Reglages() {
     if (!f) return;
     try { importSauvegarde(await readFile(f)); toast('Sauvegarde restaurée'); } catch (err) { toast(err.message || 'Fichier illisible'); }
   };
-  const sauver = () => {
-    const txt = exportSauvegarde();
-    if (!download('metre-devis-sauvegarde-' + today() + '.json', txt, 'application/json')) toast('Téléchargement impossible ici');
-    else { marquerSauvegarde(); toast('Sauvegarde téléchargée'); }
-  };
   const copier = () => {
     const txt = exportSauvegarde();
-    try { navigator.clipboard.writeText(txt).then(() => { marquerSauvegarde(); toast('Données copiées'); }, () => setCopie(true)); } catch (err) { setCopie(true); }
+    try { navigator.clipboard.writeText(txt).then(() => { marquerSauvegarde(); toast('Données copiées : collez-les dans un mail à vous-même'); }, () => setCopie(true)); } catch (err) { setCopie(true); }
   };
+  const exemplesProduits = s.produits.some((p) => p.exemple) || s.ouvrages.some((o) => o.exemple);
 
   return html`<section class="section">
     <h1>Réglages</h1>
     <div class="card">
-      <span class="tape">Entreprise (en-tête du devis)</span>
+      <span class="tape">Mon entreprise (sur les devis)</span>
       <div class="fields">
-        <${Field} label="Nom de l'entreprise" wide><${TextIn} id="e-nom" value=${e.nom} onSet=${(v) => set((st) => { st.entreprise.nom = v; })} /><//>
+        <${Field} label="Nom de l'entreprise" wide><${TextIn} id="e-nom" value=${e.nom} placeholder="Ex. Etienne Peinture" onSet=${(v) => set((st) => { st.entreprise.nom = v; })} /><//>
         <${Field} label="Adresse" wide><${TextIn} id="e-adr" value=${e.adresse} onSet=${(v) => set((st) => { st.entreprise.adresse = v; })} /><//>
         <${Field} label="Code postal"><${TextIn} id="e-cp" value=${e.cp} onSet=${(v) => set((st) => { st.entreprise.cp = v; })} /><//>
         <${Field} label="Ville"><${TextIn} id="e-ville" value=${e.ville} onSet=${(v) => set((st) => { st.entreprise.ville = v; })} /><//>
         <${Field} label="Téléphone"><${TextIn} id="e-tel" type="tel" value=${e.tel} onSet=${(v) => set((st) => { st.entreprise.tel = v; })} /><//>
         <${Field} label="E-mail"><${TextIn} id="e-mail" type="email" value=${e.email} onSet=${(v) => set((st) => { st.entreprise.email = v; })} /><//>
         <${Field} label="SIRET"><${TextIn} id="e-siret" value=${e.siret} onSet=${(v) => set((st) => { st.entreprise.siret = v; })} /><//>
-        <${Field} label="Assurance décennale" hint="Assureur, n° de contrat, zone couverte (obligatoire sur le devis)" wide><${TextIn} id="e-ass" value=${e.assurance} onSet=${(v) => set((st) => { st.entreprise.assurance = v; })} /><//>
-        <${Field} label="Mentions en bas de devis" wide><textarea id="e-ment" value=${e.mentions} onInput=${(ev) => set((st) => { st.entreprise.mentions = ev.target.value; })}></textarea><//>
+        <${Field} label="Assurance décennale (obligatoire)" hint="Nom de l'assureur, n° de contrat, zone couverte" wide><${TextIn} id="e-ass" value=${e.assurance} onSet=${(v) => set((st) => { st.entreprise.assurance = v; })} /><//>
+        ${expert() ? html`<${Field} label="Texte en bas de devis" wide><textarea id="e-ment" value=${e.mentions} onInput=${(ev) => set((st) => { st.entreprise.mentions = ev.target.value; })}></textarea><//>` : null}
       </div>
     </div>
     <div class="card">
-      <span class="tape">Tarifs par défaut des nouveaux devis</span>
+      <span class="tape">Mes prix</span>
       <div class="fields">
-        <${Field} label="Taux horaire facturé" hint="Prix de l'heure pour le client"><${NumIn} id="s-th" value=${st.tauxHoraire} suffix="€/h" onSet=${(v) => set((st) => { st.tauxHoraire = v; })} /><//>
-        <${Field} label="Coût réel de l'heure" hint="Charges, véhicule, assurance, votre salaire…"><${NumIn} id="s-ch" value=${st.coutHoraire} suffix="€/h" onSet=${(v) => set((st) => { st.coutHoraire = v; })} /><//>
-        <${Field} label="Coefficient fournitures" hint="1,25 = prix d'achat + 25 %"><${NumIn} id="s-cf" value=${st.coefFournitures} suffix="×" onSet=${(v) => set((st) => { st.coefFournitures = v; })} /><//>
-        <${Field} label="Pertes / surconsommation"><${NumIn} id="s-pe" value=${round2(num(st.pertes) * 100)} suffix="%" onSet=${(v) => set((st) => { st.pertes = num(v) / 100; })} /><//>
+        <${Field} label="Prix de l'heure pour le client"><${NumIn} id="s-th" value=${st.tauxHoraire} suffix="€/h" onSet=${(v) => set((st) => { st.tauxHoraire = v; })} /><//>
+        <${Field} label="Ce que vous coûte une heure" hint="Charges, camion, assurance, votre salaire…"><${NumIn} id="s-ch" value=${st.coutHoraire} suffix="€/h" onSet=${(v) => set((st) => { st.coutHoraire = v; })} /><//>
         <${Field} label="TVA" hint="10 % en rénovation de logement"><${NumIn} id="s-tva" value=${st.tva} suffix="%" onSet=${(v) => set((st) => { st.tva = v; })} /><//>
-        <${Field} label="Marge nette minimum" hint="Sert à calculer le prix plancher"><${NumIn} id="s-mm" value=${round2(num(st.margeMini) * 100)} suffix="%" onSet=${(v) => set((st) => { st.margeMini = num(v) / 100; })} /><//>
-        <${Field} label="Validité du devis"><${NumIn} id="s-val" value=${st.validite} suffix="jours" onSet=${(v) => set((st) => { st.validite = v; })} /><//>
         <${Field} label="Acompte à la signature"><${NumIn} id="s-ac" value=${st.acompte} suffix="%" onSet=${(v) => set((st) => { st.acompte = v; })} /><//>
-        <${Field} label="Prochain n° de devis"><${NumIn} id="s-num" value=${st.prochainNumero} onSet=${(v) => { if (v != null && v >= 1) set((st) => { st.prochainNumero = Math.round(v); }); }} /><//>
+        ${expert() ? html`
+          <${Field} label="Marge sur les produits" hint="Ajoutée au prix d'achat des produits"><${NumIn} id="s-cf" value=${round2((num(st.coefFournitures) - 1) * 100)} suffix="%" onSet=${(v) => set((st) => { st.coefFournitures = 1 + num(v) / 100; })} /><//>
+          <${Field} label="Perte de produit" hint="Fond de pot, rouleau, retouches"><${NumIn} id="s-pe" value=${round2(num(st.pertes) * 100)} suffix="%" onSet=${(v) => set((st) => { st.pertes = num(v) / 100; })} /><//>
+          <${Field} label="Bénéfice minimum" hint="En dessous : prix mini dépassé"><${NumIn} id="s-mm" value=${round2(num(st.margeMini) * 100)} suffix="%" onSet=${(v) => set((st) => { st.margeMini = num(v) / 100; })} /><//>
+          <${Field} label="Devis valable"><${NumIn} id="s-val" value=${st.validite} suffix="jours" onSet=${(v) => set((st) => { st.validite = v; })} /><//>
+          <${Field} label="Prochain n° de devis"><${NumIn} id="s-num" value=${st.prochainNumero} onSet=${(v) => { if (v != null && v >= 1) set((st) => { st.prochainNumero = Math.round(v); }); }} /><//>` : null}
       </div>
+      <label class="switch"><input id="s-expert" type="checkbox" checked=${!!st.expert} onChange=${(ev) => set((st) => { st.expert = ev.target.checked; })} /><span>Afficher les réglages avancés (marge produits, pertes, import Excel…)</span></label>
     </div>
     <div class="card">
       <span class="tape">Sauvegarde</span>
-      <p>Les données sont enregistrées sur cet appareil uniquement. Faites une sauvegarde régulièrement (ex. une fois par mois) et gardez le fichier sur votre ordinateur ou dans vos e-mails.</p>
+      <p>Vos devis sont gardés sur cet appareil seulement. Une fois par mois, envoyez-vous une sauvegarde (par mail ou WhatsApp).</p>
       <p class="muted small">Dernière sauvegarde : ${st.derniereSauvegarde ? dateFr(st.derniereSauvegarde) : 'jamais'}</p>
       <div class="row">
-        <button type="button" class="btn primary" onClick=${sauver}>Télécharger une sauvegarde</button>
-        <${ConfirmBtn} cls="plain" label="Restaurer une sauvegarde" confirm="Remplacer les données actuelles ?" onConfirm=${() => fileRef.current.click()} />
+        <button type="button" class="btn primary big" onClick=${sauvegarder}>Sauvegarder maintenant</button>
         <button type="button" class="btn ghost" onClick=${copier}>Copier les données</button>
       </div>
-      <input ref=${fileRef} type="file" accept=".json,application/json" hidden onChange=${onRestore} />
       ${copie ? html`<textarea id="copie" readonly style="min-height:120px" onFocus=${(ev) => ev.target.select()} value=${JSON.stringify(state)}></textarea>` : null}
-      <p class="hint">Restaurer remplace toutes les données actuelles par celles du fichier.</p>
-    </div>
-    <div class="card">
-      <span class="tape">Nettoyage</span>
       <div class="row">
-        ${s.devis.some((d) => d.exemple) ? html`<${ConfirmBtn} label="Effacer les devis d'exemple" onConfirm=${() => { effacerExemples(); toast('Exemples effacés'); }} />` : html`<span class="muted small">Aucun devis d'exemple.</span>`}
-        <${ConfirmBtn} label="Tout effacer et repartir des exemples" confirm="Vraiment tout effacer ?" onConfirm=${() => { state = seed(); save(); listeners.forEach((l) => l()); toast('Données réinitialisées'); }} />
+        <${ConfirmBtn} cls="plain" label="Récupérer une sauvegarde" confirm="Remplacer les données actuelles ?" onConfirm=${() => fileRef.current.click()} />
       </div>
+      <input ref=${fileRef} type="file" accept=".json,application/json" hidden onChange=${onRestore} />
+    </div>
+    ${s.devis.some((d) => d.exemple) || exemplesProduits ? html`<div class="card">
+      <span class="tape">Exemples</span>
+      <div class="stack">
+        ${s.devis.some((d) => d.exemple) ? html`<${ConfirmBtn} cls="plain" label="Supprimer les devis d'exemple (garder produits et travaux comme modèles)" confirm="Oui, supprimer les devis d'exemple" onConfirm=${() => { effacerExemples(); toast('Devis d\'exemple supprimés'); }} />` : null}
+        <${ConfirmBtn} cls="plain" label="Partir de zéro : supprimer aussi les produits et travaux d'exemple" confirm="Oui, tout ce qui est exemple" onConfirm=${() => {
+          update((s) => {
+            s.devis = s.devis.filter((d) => !d.exemple);
+            s.produits = s.produits.filter((p) => !p.exemple);
+            const restants = new Set(s.produits.map((p) => p.id));
+            s.ouvrages = s.ouvrages.filter((o) => !o.exemple);
+            s.ouvrages.forEach((o) => { o.fournitures = o.fournitures.filter((f) => restants.has(f.produitId)); });
+            if (!s.devis.length) s.settings.prochainNumero = 1;
+          });
+          toast('Exemples supprimés');
+        }} />
+      </div>
+    </div>` : null}
+    <div class="row" style="justify-content:flex-end">
+      <${ConfirmBtn} cls="sm ghost" label="Réinitialiser l'appli (efface tout)" confirm="Vraiment tout effacer ?" onConfirm=${() => { state = seed(); save(); listeners.forEach((l) => l()); toast('Appli réinitialisée'); }} />
     </div>
   </section>`;
 }
